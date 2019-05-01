@@ -71,6 +71,9 @@ if(LIBOMP_PROFILING_SUPPORT)
     ${LLVM_INCLUDE_DIR}
   )
 endif()
+if(ANDROID)
+  include_directories(${LIBOMP_SRC_DIR}/android)
+endif()
 
 # Getting correct source files to build library
 set(LIBOMP_CXXFILES)
@@ -129,6 +132,9 @@ else()
     else()
       libomp_append(LIBOMP_GNUASMFILES z_Linux_asm.S) # Unix assembly file
     endif()
+  endif()
+  if(ANDROID)
+    libomp_append(LIBOMP_CXXFILES android/nltypes_stubs.cpp)
   endif()
   libomp_append(LIBOMP_CXXFILES thirdparty/ittnotify/ittnotify_static.cpp LIBOMP_USE_ITT_NOTIFY)
   libomp_append(LIBOMP_CXXFILES kmp_debugger.cpp LIBOMP_USE_DEBUGGER)
