@@ -153,6 +153,10 @@ if (BOLT_ENABLE_RUNTIME)
   if(CMAKE_SYSROOT)
     list(APPEND extra_args -DCMAKE_SYSROOT=${CMAKE_SYSROOT})
   endif()
+  string(REPLACE "-flto=thin" "-fno-lto" CMAKE_C_FLAGS_NOLTO "${CMAKE_C_FLAGS}")
+  string(REPLACE "-flto=thin" "-fno-lto" CMAKE_CXX_FLAGS_NOLTO "${CMAKE_CXX_FLAGS}")
+  string(REPLACE "-flto=thin" "-fno-lto" CMAKE_ASM_FLAGS_NOLTO "${CMAKE_ASM_FLAGS}")
+  string(REPLACE "-flto=thin" "-fno-lto" CMAKE_EXE_LINKER_FLAGS_NOLTO "${CMAKE_EXE_LINKER_FLAGS}")
 
   include(ExternalProject)
   ExternalProject_Add(bolt_rt
@@ -160,7 +164,11 @@ if (BOLT_ENABLE_RUNTIME)
     STAMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/bolt_rt-stamps
     BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/bolt_rt-bins
     CMAKE_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+               -DCMAKE_ASM_FLAGS=${CMAKE_ASM_FLAGS_NOLTO}
+               -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS_NOLTO}
+               -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS_NOLTO}
                -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+               -DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS_NOLTO}
                -DCMAKE_BUILD_TYPE=Release
                -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
                -DLLVM_LIBDIR_SUFFIX=${LLVM_LIBDIR_SUFFIX}
