@@ -6,6 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+// FIXME: Flaky on Android i386 build
+// https://github.com/llvm/llvm-project/issues/113265
+// UNSUPPORTED: target=i386-unknown-linux-gnu
+
 // UNSUPPORTED: c++03, c++11, c++14
 
 // TODO Investigate why this fails
