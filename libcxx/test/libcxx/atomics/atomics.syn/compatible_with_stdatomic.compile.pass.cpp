@@ -7,14 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: no-threads
-// UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
 
 // This test verifies that <stdatomic.h> redirects to <atomic>.
 
-// Before C++23, <stdatomic.h> can be included after <atomic>, but including it
-// first doesn't work because its macros break <atomic>. Fixing that is the point
-// of the C++23 change that added <stdatomic.h> to C++. Thus, this test verifies
-// that <stdatomic.h> can be included first.
+// Ordinarily, <stdatomic.h> can be included after <atomic>, but including it
+// first doesn't work because its macros break <atomic>. Verify that
+// <stdatomic.h> can be included first.
 #include <stdatomic.h>
 #include <atomic>
 
