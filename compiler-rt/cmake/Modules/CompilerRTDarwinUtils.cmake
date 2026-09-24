@@ -97,7 +97,7 @@ function(darwin_get_toolchain_supported_archs output_var)
   else()
     # If auto-detecting fails, fall back to a default set
     message(WARNING "Detecting supported architectures from 'ld -v' failed. Returning default set.")
-    set(ARCHES "i386;x86_64;armv7;armv7s;arm64")
+    set(ARCHES "x86_64;armv7;armv7s;arm64")
   endif()
   set(${output_var} ${ARCHES} PARENT_SCOPE)
 endfunction()
@@ -532,11 +532,6 @@ macro(darwin_add_embedded_builtin_libraries)
   set(DARWIN_SOFT_FLOAT_ARCHS armv6m armv7m armv7em armv7 armv8m.main armv8.1m.main)
   set(DARWIN_HARD_FLOAT_ARCHS armv7em armv7 armv8m.main armv8.1m.main)
   if(COMPILER_RT_SUPPORTED_ARCH MATCHES ".*armv.*")
-    list(FIND COMPILER_RT_SUPPORTED_ARCH i386 i386_idx)
-    if(i386_idx GREATER -1)
-      list(APPEND DARWIN_HARD_FLOAT_ARCHS i386)
-    endif()
-
     list(FIND COMPILER_RT_SUPPORTED_ARCH x86_64 x86_64_idx)
     if(x86_64_idx GREATER -1)
       list(APPEND DARWIN_HARD_FLOAT_ARCHS x86_64)
@@ -556,7 +551,7 @@ macro(darwin_add_embedded_builtin_libraries)
     set(PIC_FLAG -fPIC)
     set(STATIC_FLAG -static)
 
-    set(DARWIN_macho_embedded_ARCHS armv6m armv7m armv7em armv7 armv8m.main armv8.1m.main i386 x86_64)
+    set(DARWIN_macho_embedded_ARCHS armv6m armv7m armv7em armv7 armv8m.main armv8.1m.main  x86_64)
 
     set(DARWIN_macho_embedded_LIBRARY_OUTPUT_DIR
       ${COMPILER_RT_OUTPUT_LIBRARY_DIR}/macho_embedded)
@@ -564,13 +559,11 @@ macro(darwin_add_embedded_builtin_libraries)
       ${COMPILER_RT_INSTALL_LIBRARY_DIR}/macho_embedded)
 
     set(CFLAGS_armv7 -target thumbv7-apple-darwin-eabi)
-    set(CFLAGS_i386 -march=pentium)
 
     darwin_read_list_from_file(common_FUNCTIONS ${MACHO_SYM_DIR}/common.txt)
     darwin_read_list_from_file(thumb2_FUNCTIONS ${MACHO_SYM_DIR}/thumb2.txt)
     darwin_read_list_from_file(thumb2_64_FUNCTIONS ${MACHO_SYM_DIR}/thumb2-64.txt)
     darwin_read_list_from_file(arm_FUNCTIONS ${MACHO_SYM_DIR}/arm.txt)
-    darwin_read_list_from_file(i386_FUNCTIONS ${MACHO_SYM_DIR}/i386.txt)
 
 
     set(armv6m_FUNCTIONS ${common_FUNCTIONS} ${arm_FUNCTIONS})
@@ -579,7 +572,6 @@ macro(darwin_add_embedded_builtin_libraries)
     set(armv7_FUNCTIONS ${common_FUNCTIONS} ${arm_FUNCTIONS} ${thumb2_FUNCTIONS} ${thumb2_64_FUNCTIONS})
     set(armv8m.main_FUNCTIONS ${common_FUNCTIONS} ${arm_FUNCTIONS} ${thumb2_FUNCTIONS} ${thumb2_64_FUNCTIONS})
     set(armv8.1m.main_FUNCTIONS ${common_FUNCTIONS} ${arm_FUNCTIONS} ${thumb2_FUNCTIONS} ${thumb2_64_FUNCTIONS})
-    set(i386_FUNCTIONS ${common_FUNCTIONS} ${i386_FUNCTIONS})
     set(x86_64_FUNCTIONS ${common_FUNCTIONS})
 
     foreach(arch ${DARWIN_macho_embedded_ARCHS})

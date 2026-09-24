@@ -82,7 +82,6 @@ set(ARM64 aarch64 arm64ec aarch64_lfi)
 set(ARM32 arm armhf armv4t armv5te armv6 armv6m armv7m armv7em armv7 armv7s armv7k armv8m.base armv8m.main armv8.1m.main)
 set(AVR avr)
 set(HEXAGON hexagon)
-set(X86 i386)
 set(X86_64 x86_64)
 set(LOONGARCH64 loongarch64)
 set(MIPS32 mips mipsel)
@@ -108,7 +107,7 @@ if(APPLE)
 endif()
 
 set(ALL_BUILTIN_SUPPORTED_ARCH
-  ${X86} ${X86_64} ${AMDGPU} ${ARM32} ${ARM64} ${AVR}
+  ${X86_64} ${AMDGPU} ${ARM32} ${ARM64} ${AVR}
   ${HEXAGON} ${MIPS32} ${MIPS64} ${NVPTX} ${PPC32} ${PPC64}
   ${RISCV32} ${RISCV64} ${S390X} ${SPARC} ${SPARCV9} ${SPIRV64}
   ${WASM32} ${WASM64} ${VE} ${LOONGARCH64} ${M68K})
@@ -157,7 +156,7 @@ if(APPLE)
   set(DARWIN_osx_BUILTIN_MIN_VER 10.7)
   set(DARWIN_osx_BUILTIN_MIN_VER_FLAG
       -mmacosx-version-min=${DARWIN_osx_BUILTIN_MIN_VER})
-  set(DARWIN_osx_BUILTIN_ALL_POSSIBLE_ARCHS ${X86} ${X86_64})
+  set(DARWIN_osx_BUILTIN_ALL_POSSIBLE_ARCHS ${X86_64})
   # Add support for arm64 macOS if available in SDK.
   foreach(arch ${ARM64})
     sdk_has_arch_support(${DARWIN_osx_SYSROOT} macosx ${arch} MACOS_ARM_SUPPORT)
@@ -173,7 +172,7 @@ if(APPLE)
     set(DARWIN_ios_BUILTIN_MIN_VER_FLAG
       ${DARWIN_ios_MIN_VER_FLAG}=${DARWIN_ios_BUILTIN_MIN_VER})
     set(DARWIN_ios_BUILTIN_ALL_POSSIBLE_ARCHS ${ARM64} ${ARM32})
-    set(DARWIN_iossim_BUILTIN_ALL_POSSIBLE_ARCHS ${X86} ${X86_64})
+    set(DARWIN_iossim_BUILTIN_ALL_POSSIBLE_ARCHS ${X86_64})
     find_darwin_sdk_version(iossim_sdk_version "iphonesimulator")
     if ("${iossim_sdk_version}" VERSION_GREATER 14.0 OR "${iossim_sdk_version}" VERSION_EQUAL 14.0)
       list(APPEND DARWIN_iossim_BUILTIN_ALL_POSSIBLE_ARCHS arm64)
@@ -186,7 +185,6 @@ if(APPLE)
     set(DARWIN_watchos_BUILTIN_MIN_VER_FLAG
       ${DARWIN_watchos_MIN_VER_FLAG}=${DARWIN_watchos_BUILTIN_MIN_VER})
     set(DARWIN_watchos_BUILTIN_ALL_POSSIBLE_ARCHS armv7 armv7k arm64_32)
-    set(DARWIN_watchossim_BUILTIN_ALL_POSSIBLE_ARCHS ${X86})
     find_darwin_sdk_version(watchossim_sdk_version "watchsimulator")
     if ("${watchossim_sdk_version}" VERSION_GREATER 7.0 OR "${watchossim_sdk_version}" VERSION_EQUAL 7.0)
       list(APPEND DARWIN_watchossim_BUILTIN_ALL_POSSIBLE_ARCHS arm64)
@@ -199,7 +197,7 @@ if(APPLE)
     set(DARWIN_tvos_BUILTIN_MIN_VER_FLAG
       ${DARWIN_tvos_MIN_VER_FLAG}=${DARWIN_tvos_BUILTIN_MIN_VER})
     set(DARWIN_tvos_BUILTIN_ALL_POSSIBLE_ARCHS armv7 arm64)
-    set(DARWIN_tvossim_BUILTIN_ALL_POSSIBLE_ARCHS ${X86} ${X86_64})
+    set(DARWIN_tvossim_BUILTIN_ALL_POSSIBLE_ARCHS ${X86_64})
     find_darwin_sdk_version(tvossim_sdk_version "appletvsimulator")
     if ("${tvossim_sdk_version}" VERSION_GREATER 14.0 OR "${tvossim_sdk_version}" VERSION_EQUAL 14.0)
       list(APPEND DARWIN_tvossim_BUILTIN_ALL_POSSIBLE_ARCHS arm64)
