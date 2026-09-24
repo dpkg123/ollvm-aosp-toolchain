@@ -152,7 +152,6 @@ macro(detect_target_arch)
   check_symbol_exists(__AVR__ "" __AVR)
   check_symbol_exists(__aarch64__ "" __AARCH64)
   check_symbol_exists(__x86_64__ "" __X86_64)
-  check_symbol_exists(__i386__ "" __I386)
   check_symbol_exists(__hexagon__ "" __HEXAGON)
   check_symbol_exists(__loongarch__ "" __LOONGARCH)
   check_symbol_exists(__mips__ "" __MIPS)
@@ -187,8 +186,6 @@ macro(detect_target_arch)
     endif()
   elseif(__HEXAGON)
     add_default_target_arch(hexagon)
-  elseif(__I386)
-    add_default_target_arch(i386)
   elseif(__LOONGARCH)
     if(CMAKE_SIZEOF_VOID_P EQUAL "4")
       add_default_target_arch(loongarch32)
@@ -420,13 +417,6 @@ macro(construct_compiler_rt_default_triple)
 
   string(REPLACE "-" ";" LLVM_TARGET_TRIPLE_LIST ${COMPILER_RT_DEFAULT_TARGET_TRIPLE})
   list(GET LLVM_TARGET_TRIPLE_LIST 0 COMPILER_RT_DEFAULT_TARGET_ARCH)
-
-  # Map various forms of the architecture names to the canonical forms
-  # (as they are used by clang, see getArchNameForCompilerRTLib).
-  if("${COMPILER_RT_DEFAULT_TARGET_ARCH}" MATCHES "^i.86$")
-    # Android uses i686, but that's remapped at a later stage.
-    set(COMPILER_RT_DEFAULT_TARGET_ARCH "i386")
-  endif()
 
   if("${COMPILER_RT_DEFAULT_TARGET_ARCH}" MATCHES "^thumb")
     string(REPLACE "thumb" "arm" COMPILER_RT_DEFAULT_TARGET_ARCH "${COMPILER_RT_DEFAULT_TARGET_ARCH}")
