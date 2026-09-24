@@ -136,7 +136,6 @@ static void lowerAwaitSuspend(IRBuilder<> &Builder, CoroAwaitSuspendInst *CB,
     FunctionType *ResumeTy = FunctionType::get(
         Type::getVoidTy(Ctx), PointerType::getUnqual(Ctx), false);
     auto *ResumeCall = Builder.CreateCall(ResumeTy, ResumeAddr, {NewCall});
-    ResumeCall->setCallingConv(CallingConv::Fast);
 
     // We can't insert the 'ret' instruction and adjust the cc until the
     // function has been split, so remember this for later.
@@ -163,6 +162,50 @@ static void maybeFreeRetconStorage(IRBuilder<> &Builder,
     return;
 
   Shape.emitDealloc(Builder, FramePtr, CG);
+}
+
+/// Create a pointer to the switch destroy function field in the coroutine
+/// frame.
+static Value *createSwitchDestroyPtr(const coro::Shape &Shape,
+                                     IRBuilder<> &Builder, Value *FramePtr) {
+  auto *Offset = ConstantInt::get(Type::getInt64Ty(FramePtr->getContext()),
+                                  Shape.SwitchLowering.DestroyOffset);
+  return Builder.CreateInBoundsPtrAdd(FramePtr, Offset, "destroy.addr");
+}
+
+/// Make resume-clone coro.free conditional on whether the frame is elided.
+///
+/// The destroy slot holds the cleanup clone for an elided frame and the destroy
+/// clone for a heap frame. Load it before user code can reentrantly destroy the
+/// enclosing caller frame, then use the cached comparison to suppress only the
+/// deallocation. The resume clone has already performed the shared coroutine
+/// cleanup, so calling either clone here would run that cleanup twice.
+static void replaceSwitchResumeCoroFree(const coro::Shape &Shape,
+                                        Function &Resume, Function &Cleanup) {
+  Value *FramePtr = Resume.getArg(0);
+  IRBuilder<> EntryBuilder(Resume.getEntryBlock().getTerminator());
+  Value *DestroyAddr = createSwitchDestroyPtr(Shape, EntryBuilder, FramePtr);
+  Value *DestroyFn = EntryBuilder.CreateLoad(Shape.getSwitchResumePointerType(),
+                                             DestroyAddr, "destroy");
+  Value *CleanupFn =
+      EntryBuilder.CreatePointerCast(&Cleanup, DestroyFn->getType());
+  Value *IsElided =
+      EntryBuilder.CreateICmpEQ(DestroyFn, CleanupFn, "is.elided");
+
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
+  for (User *U : FramePtr->users()) {
+    if (auto *CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
+  }
+
+  for (CoroFreeInst *CF : CoroFrees) {
+    IRBuilder<> Builder(CF);
+    auto *Null = ConstantPointerNull::get(cast<PointerType>(CF->getType()));
+    Value *Replacement =
+        Builder.CreateSelect(IsElided, Null, FramePtr, "coro.free");
+    CF->replaceAllUsesWith(Replacement);
+    CF->eraseFromParent();
+  }
 }
 
 /// Replace an llvm.coro.end.async.
@@ -1383,6 +1426,9 @@ struct SwitchCoroutineSplitter {
     auto *CleanupClone = coro::SwitchCloner::createClone(
         F, ".cleanup", Shape, coro::CloneKind::SwitchCleanup, TTI);
 
+    if (Shape.SwitchLowering.HasCoroElideNoAllocVariant)
+      replaceSwitchResumeCoroFree(Shape, *ResumeClone, *CleanupClone);
+
     postSplitCleanup(*ResumeClone);
     postSplitCleanup(*DestroyClone);
     postSplitCleanup(*CleanupClone);
@@ -2015,6 +2061,9 @@ static void doSplitCoroutine(Function &F, SmallVectorImpl<Function *> &Clones,
   bool shouldCreateNoAllocVariant =
       !isNoSuspendCoroutine && Shape.ABI == coro::ABI::Switch &&
       hasSafeElideCaller(F) && !F.hasFnAttribute(llvm::Attribute::NoInline);
+  if (Shape.ABI == coro::ABI::Switch)
+    Shape.SwitchLowering.HasCoroElideNoAllocVariant =
+        shouldCreateNoAllocVariant;
 
   // If there are no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed.
@@ -2053,10 +2102,22 @@ static LazyCallGraph::SCC &updateCallGraphAfterCoroutineSplit(
   if (!Clones.empty()) {
     switch (Shape.ABI) {
     case coro::ABI::Switch:
-      // Each clone in the Switch lowering is independent of the other clones.
-      // Let the LazyCallGraph know about each one separately.
-      for (Function *Clone : Clones)
-        CG.addSplitFunction(N.getFunction(), *Clone);
+      // The resume clone's elided-frame check holds a reference to the cleanup
+      // clone. Add the cleanup clone first, so populating the resume node does
+      // not materialize an unregistered cleanup node.
+      if (Shape.SwitchLowering.HasCoroElideNoAllocVariant) {
+        assert(Clones.size() >= 3 && "expected switch coroutine clones");
+        CG.addSplitFunction(N.getFunction(), *Clones[2]);
+        CG.addSplitFunction(N.getFunction(), *Clones[1]);
+        CG.addSplitFunction(N.getFunction(), *Clones[0]);
+        for (Function *Clone : drop_begin(Clones, 3))
+          CG.addSplitFunction(N.getFunction(), *Clone);
+      } else {
+        // Each clone in the Switch lowering is independent of the other
+        // clones. Let the LazyCallGraph know about each one separately.
+        for (Function *Clone : Clones)
+          CG.addSplitFunction(N.getFunction(), *Clone);
+      }
       break;
     case coro::ABI::Async:
     case coro::ABI::Retcon:

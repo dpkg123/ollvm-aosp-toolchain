@@ -1,5 +1,12 @@
 # See docs/CMake.html for instructions about how to build LLVM with CMake.
 cmake_minimum_required(VERSION 3.20.0)
+if("${CMAKE_VERSION}" VERSION_LESS "3.31.0")
+  message(WARNING
+    "Your CMake version is ${CMAKE_VERSION}. Starting with LLVM 24, the "
+    "minimum version of CMake required to build LLVM will become 3.31.0, and "
+    "using an older CMake will become an error. Please upgrade your CMake to "
+    "at least 3.31.0 now to avoid issues in the future.")
+endif()
 
 include(CMakeDependentOption)
 
@@ -483,19 +490,32 @@ set(CPACK_PACKAGE_VERSION_PATCH ${LLVM_VERSION_PATCH})
 set(CPACK_PACKAGE_VERSION ${PACKAGE_VERSION})
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.TXT")
 if(WIN32 AND NOT UNIX)
-  set(CPACK_NSIS_COMPRESSOR "/SOLID lzma \r\n SetCompressorDictSize 32")
   if(NOT DEFINED CPACK_PACKAGE_INSTALL_REGISTRY_KEY)
     set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY "LLVM")
   endif()
   set(CPACK_PACKAGE_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_logo.bmp")
-  set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
-  set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
-  set(CPACK_NSIS_MODIFY_PATH "ON")
-  set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL "ON")
-  if( CMAKE_CL_64 )
-    if(NOT DEFINED CPACK_NSIS_INSTALL_ROOT)
-      set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+  if (CPACK_GENERATOR STREQUAL "NSIS")
+    set(CPACK_NSIS_COMPRESSOR "/SOLID lzma \r\n SetCompressorDictSize 32")
+    set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
+    set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
+    set(CPACK_NSIS_MODIFY_PATH "ON")
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL "ON")
+    if( CMAKE_CL_64 )
+      if(NOT DEFINED CPACK_NSIS_INSTALL_ROOT)
+        set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+      endif()
     endif()
+  endif()
+  if(CPACK_GENERATOR STREQUAL "WIX")
+    set(CPACK_WIX_PRODUCT_ICON "${CMAKE_CURRENT_SOURCE_DIR}\\\\cmake\\\\nsis_icon.ico")
+    # -sval: the WIX installer needs admin privileges unless we use this flag.
+    # -dcl:high: light defaults the cabinet to MSZIP (deflate, 32 KiB window),
+    # which captures almost no redundancy between the payload's binaries.  high
+    # selects LZX with a 21-bit (2 MiB) window instead.  That is the strongest
+    # compression available here: Windows Installer has to be able to read the
+    # cabinet itself, and CAB supports only MSZIP/LZX/Quantum, so an MSI cannot
+    # use LZMA the way the NSIS generator does.
+    set(CPACK_WIX_LIGHT_EXTRA_FLAGS "-sval" "-dcl:high")
   endif()
 endif()
 include(CPack)
@@ -646,6 +666,8 @@ set(LLVM_TARGET_ARCH "host"
 
 set(LLVM_ENABLE_LIBXML2 "ON" CACHE STRING "Use libxml2 if available. Can be ON, OFF, or FORCE_ON")
 
+set(LLVM_USE_STATIC_LIBXML2 "OFF" CACHE BOOL "Use static version of libxml2. Can be ON, or OFF")
+
 option(LLVM_ENABLE_LIBEDIT "Use libedit if available." ON)
 
 option(LLVM_ENABLE_LIBPFM "Use libpfm for performance counters if available." ON)
@@ -698,6 +720,10 @@ endif()
 
 set(LLVM_ENABLE_Z3_SOLVER_DEFAULT "${Z3_FOUND}")
 
+include(FindLibcCommonUtils)
+if(NOT TARGET llvm-libc-common-utilities)
+  message(FATAL_ERROR "LLVM libc is not found at ${libc_path}.")
+endif()
 
 if( LLVM_TARGETS_TO_BUILD STREQUAL "all" )
   set( LLVM_TARGETS_TO_BUILD ${LLVM_ALL_TARGETS} )
@@ -1057,7 +1083,7 @@ set(LLVM_PROFDATA_FILE "" CACHE FILEPATH
 set(LLVM_SPROFDATA_FILE "" CACHE FILEPATH
   "Sampling profiling data file to use when compiling in order to improve runtime performance.")
 
-if(LLVM_INCLUDE_TESTS)
+if(LLVM_INCLUDE_TESTS OR LLVM_ENABLE_SPHINX)
   # All LLVM Python files should be compatible down to this minimum version.
   set(LLVM_MINIMUM_PYTHON_VERSION 3.8)
 else()

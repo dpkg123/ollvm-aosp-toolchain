@@ -330,6 +330,12 @@ static bool canThrow(const FunctionDecl *Func) {
   if (!FunProto)
     return true;
 
+  // Clang evaluates unresolved exception specs before generating any call to
+  // the function, so these functions cannot appear at a call site and cannot
+  // throw.
+  if (isUnresolvedExceptionSpec(FunProto->getExceptionSpecType()))
+    return false;
+
   switch (FunProto->canThrow()) {
   case CT_Cannot:
     return false;
@@ -359,6 +365,8 @@ ExceptionAnalyzer::ExceptionInfo::filterByCatch(const Type *HandlerTy,
   SmallVector<const Type *, 8> TypesToDelete;
   for (const auto &ThrownException : ThrownExceptions) {
     const Type *ExceptionTy = ThrownException.getFirst();
+    if (!ExceptionTy)
+      continue;
     const CanQualType ExceptionCanTy =
         ExceptionTy->getCanonicalTypeUnqualified();
     const CanQualType HandlerCanTy = HandlerTy->getCanonicalTypeUnqualified();
@@ -496,9 +504,17 @@ ExceptionAnalyzer::ExceptionInfo ExceptionAnalyzer::throwsException(
     return Result;
   }
 
+  // Functions without a visible body can still be known non-throwing from their
+  // exception specification.
+  if (!canThrow(Func))
+    return ExceptionInfo::createNonThrowing();
+
   auto Result = ExceptionInfo::createUnknown();
 
   if (const auto *FPT = Func->getType()->getAs<FunctionProtoType>()) {
+    if (isUnresolvedExceptionSpec(FPT->getExceptionSpecType()))
+      return ExceptionInfo::createNonThrowing();
+
     for (const QualType &Ex : FPT->exceptions()) {
       CallStack.insert({Func, CallLoc});
       Result.registerException(
@@ -598,6 +614,8 @@ ExceptionAnalyzer::throwsException(const Stmt *St,
                                   Excs.getExceptions(), CallStack));
     for (const auto &Exception : Excs.getExceptions()) {
       const Type *ExcType = Exception.getFirst();
+      if (!ExcType)
+        continue;
       if (const CXXRecordDecl *ThrowableRec = ExcType->getAsCXXRecordDecl()) {
         const ExceptionInfo DestructorExcs = throwsException(
             ThrowableRec->getDestructor(), Caught, CallStack, SourceLocation{});
