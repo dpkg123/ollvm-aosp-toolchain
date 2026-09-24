@@ -55,7 +55,7 @@ Please select the corresponding branch according to your targeted AOSP revision 
 | `ollvm-r450784-clang14` | Clang 14 | Legacy baseline branch for earlier Android toolchain compatibility. |
 
 > **Note:**
-> - Branches designated with `+omp` include additional OpenMP runtime / compiler support.
+> - Branches designated with `+omp` include additional VMP / compiler support.
 > - The `main` branch serves primarily as a landing and meta-branch; checkout the specific `ollvm-*` branch matching your requirements prior to compilation.
 
 ---
