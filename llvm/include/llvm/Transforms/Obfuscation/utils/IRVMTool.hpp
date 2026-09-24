@@ -234,7 +234,7 @@ public:
     if (GRel_.empty()) return nullptr;
 
     LLVMContext& Ctx = M.getContext();
-    Type* I8Ptr   = Type::getInt8PtrTy(Ctx);
+    Type* I8Ptr   = PointerType::getUnqual(Ctx);
     Type* IntPtrT = M.getDataLayout().getIntPtrType(Ctx); // 32/64 位自适应
 
     auto makeVoidPtrFromU64 = [&](uint64_t v)->Constant* {

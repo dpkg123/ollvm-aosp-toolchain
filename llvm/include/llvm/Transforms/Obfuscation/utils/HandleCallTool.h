@@ -48,7 +48,7 @@ public:
     Ctx = &M.getContext();
     I64 = llvm::Type::getInt64Ty(*Ctx);
     I8  = llvm::Type::getInt8Ty(*Ctx);
-    I8Ptr = llvm::Type::getInt8PtrTy(*Ctx);             // i8*
+    I8Ptr = llvm::PointerType::getUnqual(*Ctx);             // i8*
   }
 
   void collectFromFunction(llvm::Function &F) {
