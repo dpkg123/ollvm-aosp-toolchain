@@ -81,7 +81,7 @@ static bool isConstLike(llvm::Value *V) {
 class VMCodeGen {
 public:
   VMCodeGen(llvm::Function &F, vmp::HandleCallTool &tool)
-  : F(F), M(*F.getParent()), C(M.getContext()), DL(&M),
+  : F(F), M(*F.getParent()), C(M.getContext()), DL(M.getDataLayout()),
     Tool(tool), PtrSize(DL.getPointerSize()) {}
 
   void run() {
