@@ -97,8 +97,7 @@ inline bool setBytes(GlobalVariable* GV, ArrayRef<uint8_t> Bytes) {
 
 // 为 i8* 全局变量设置为常量字符串地址（自动创建私有字符串符号）
 inline bool setCStringPtr(GlobalVariable* GV, Module& M, StringRef Bytes, bool AddNull = true) {
-    if (!GV->getValueType()->isPointerTy() ||
-        GV->getValueType()->getPointerElementType() != Type::getInt8Ty(M.getContext()))
+    if (!GV->getValueType()->isPointerTy())
         return false;
     if (!isDefinableGlobal(GV)) return false;
 
@@ -174,7 +173,7 @@ inline Function* emitCtorStore(Module& M, GlobalVariable* GV, Constant* RHS, uns
         } else if (Ty->isIntegerTy() && ToStore->getType()->isIntegerTy()) {
             unsigned SW = cast<IntegerType>(ToStore->getType())->getBitWidth();
             unsigned DW = cast<IntegerType>(Ty)->getBitWidth();
-            if (SW < DW) ToStore = ConstantExpr::getZExt(ToStore, Ty);
+            if (SW < DW) ToStore = ConstantExpr::getCast(Instruction::ZExt, ToStore, Ty);
             else if (SW > DW) ToStore = ConstantExpr::getTrunc(ToStore, Ty);
         } else {
             // 其他复杂情况可以扩展
@@ -221,7 +220,7 @@ inline bool setUintPtrFromFuncName(Module& M, StringRef GVName, StringRef FuncNa
 
 // 为名为 GVName 的 i8* 写入常量字符串地址
 inline bool setCStringPtrByName(Module& M, StringRef GVName, StringRef Str, bool AddNull = true) {
-    auto* I8P = Type::getInt8PtrTy(M.getContext());
+    auto* I8P = PointerType::getUnqual(M.getContext());
     GlobalVariable* GV = ensureDefinableGV(M, GVName, I8P, PrefPtrAlign(M));
     return setCStringPtr(GV, M, Str, AddNull);
 }
@@ -283,7 +282,7 @@ inline bool setCStringPtrByName(Module& M, StringRef GVName, StringRef Str, bool
     using namespace llvm;
     LLVMContext& Ctx = M.getContext();
     Type* I8   = Type::getInt8Ty(Ctx);
-    Type* I8P  = PointerType::getUnqual(I8);
+    Type* I8P  = PointerType::getUnqual(M.getContext());
 
     std::vector<Constant*> Ptrs;
     Ptrs.reserve(Items.size());
