@@ -7,15 +7,13 @@
         <img src="./assets/qrcode_1775907901061.jpg" alt="Arkari 动漫角色交流群二维码" width="160" />
       </a>
     </td>
-    <td align="center">
-      <a href="https://t.me/llvm_arkari">
         <td align="center">
       <a href="https://t.me/llvm_arkari">
-        <img src="https://img.shields.io/badge/Telegram-飞机群组-58EFF2?style=for-the-badge&logo=telegram&logoColor=white" alt="加入Telegram群组" />
+        <img src="https://img.shields.io/badge/Telegram-Group-58EFF2?style=for-the-badge&logo=telegram&logoColor=white" alt="加入Telegram群组" />
       </a>
       <br />
       <a href="https://discord.gg/f5nDYjsrKZ">
-        <img src="https://img.shields.io/badge/Discord-加入群组-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="加入Discord群组" />
+        <img src="https://img.shields.io/badge/Discord-Server-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="加入Discord群组" />
       </a>
       <br />
       <a href="https://qm.qq.com/q/ZBra3aCswY">
@@ -23,80 +21,78 @@
       </a>
       <br />
       <a href="https://codextopapi.com/">
-        <img src="https://img.shields.io/badge/[AD]AI中转大巴车-QQ群 441337845-12B7F5?style=for-the-badge&logo=tencentqq&logoColor=white" alt="加入QQ群聊" />
+        <img src="https://img.shields.io/badge/[AD]AI intelligent agent provider-QQGroup 441337845-12B7F5?style=for-the-badge&logo=tencentqq&logoColor=white" alt="" />
       </a>
-      <br/>
-    </td>
       <br />
     </td>
   </tr>
 </table>
 
 <p align="center">
- <a href="https://github.com/KomiMoe/Arkari/issues">
+ <a href="https://github.com/komimoe/Arkari/issues">
   <img src="https://img.shields.io/github/issues/komimoe/Arkari?colorA=363a4f&colorB=e6b2cc&style=for-the-badge"/> 
  </a>
- <a href="https://github.com/KomiMoe/Arkari/network/members">
+ <a href="https://github.com/komimoe/Arkari/network/members">
   <img src="https://img.shields.io/github/forks/komimoe/Arkari?colorA=363a4f&colorB=e6b2cc&style=for-the-badge"/> 
  </a>  
- <a href="https://github.com/KomiMoe/Arkari/stargazers">
+ <a href="https://github.com/komimoe/Arkari/stargazers">
   <img src="https://img.shields.io/github/stars/komimoe/Arkari?colorA=363a4f&colorB=e6b2cc&style=for-the-badge"/> 
  </a>
- <a href="https://github.com/KomiMoe/Arkari/LICENSE">
+ <a href="https://github.com/komimoe/Arkari/LICENSE">
   <img src="https://img.shields.io/github/license/komimoe/Arkari?colorA=363a4f&colorB=e6b2cc&style=for-the-badge"/> 
  </a>
 </p>
 <p align="center">
- <a href="./README_en.md">
-  <img src="https://img.shields.io/badge/README-English-blue.svg?colorA=161b1d&colorB=20afdf&style=for-the-badge" alt="Read in English"/>
+ <a href="./README.md">
+  <img src="https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue.svg?colorA=161b1d&colorB=20afdf&style=for-the-badge" alt="Read in Chinese"/>
  </a>
 </p>
 <h3 align="center">Yet another LLVM-based obfuscator derived from Goron</h3>
 
-## 介绍
+## Introduction
 
-当前支持特性：
+Supported features:
 
-- 混淆过程间相关
-- 间接跳转,并加密跳转目标(`-mllvm -irobf-indbr`)
-- 间接函数调用,并加密目标函数地址(`-mllvm -irobf-icall`)
-- 间接全局变量引用,并加密变量地址(`-mllvm -irobf-indgv`)
-- 字符串(c string)加密功能(`-mllvm -irobf-cse`)
-- 过程相关控制流平坦混淆(`-mllvm -irobf-fla`)
-- 整数常量加密(`-mllvm -irobf-cie`) (Win64-MT-19.1.3-obf1.6.0 or later)
-- 浮点常量加密(`-mllvm -irobf-cfe`) (Win64-MT-19.1.3-obf1.6.0 or later)
-- Microsoft CXXABI RTTI Name 擦除器 (实验性功能!) [需要指定配置文件路径 以及 配置文件`randomSeed`字段(32字节，不足会在后面补0，超过会截断)] (`-mllvm -irobf-rtti`) (Win64-MT-20.1.7-obf1.7.0 or later)
-- 全部 (`-mllvm -irobf-indbr -mllvm -irobf-icall -mllvm -irobf-indgv -mllvm -irobf-cse -mllvm -irobf-fla -mllvm -irobf-cie -mllvm -irobf-cfe -mllvm -irobf-rtti`)
-- 或直接通过配置文件管理(`-mllvm -arkari-cfg="配置文件路径|Your config path"`) (Win64-MT-20.1.7-obf1.7.0 or later)
+- Inter-procedural obfuscation
+- Indirect jumps with encrypted jump targets (`-mllvm -irobf-indbr`)
+- Indirect function calls with encrypted target function addresses (`-mllvm -irobf-icall`)
+- Indirect global variable references with encrypted variable addresses (`-mllvm -irobf-indgv`)
+- C string encryption (`-mllvm -irobf-cse`)
+- Inter-procedural control flow flattening obfuscation (`-mllvm -irobf-fla`)
+- Integer constant encryption (`-mllvm -irobf-cie`) (Win64-MT-19.1.3-obf1.6.0 or later)
+- Floating-point constant encryption (`-mllvm -irobf-cfe`) (Win64-MT-19.1.3-obf1.6.0 or later)
+- Microsoft CXXABI RTTI Name Eraser (experimental) [requires a configuration file path and a `randomSeed` field in that file (32 bytes; pad with 0 if shorter, truncate if longer)] (`-mllvm -irobf-rtti`) (Win64-MT-20.1.7-obf1.7.0 or later)
+- All features (`-mllvm -irobf-indbr -mllvm -irobf-icall -mllvm -irobf-indgv -mllvm -irobf-cse -mllvm -irobf-fla -mllvm -irobf-cie -mllvm -irobf-cfe -mllvm -irobf-rtti`)
+- Or manage via a configuration file (`-mllvm -arkari-cfg="Configuration file path|Your config path"`) (Win64-MT-20.1.7-obf1.7.0 or later)
 
-对比于goron的改进：
+Improvements over Goron:
 
-- 由于作者明确表示暂时(至少几万年吧)不会跟进llvm版本和不会继续更新. 所以有了这个版本(https://github.com/amimo/goron/issues/29)
-- 更新了llvm版本
-- 编译时输出文件名, 防止憋死强迫症
-- 修复了亿点点已知的bug
+- Created because the original author stated they would not update LLVM or continue development for the foreseeable future ("tens of thousands of years") (https://github.com/amimo/goron/issues/29)
+- Updated LLVM version
+- Print output file names during compilation to make builds easier to track
+- Fixed numerous known bugs
 
 ```
-- 修复了混淆后SEH爆炸的问题
-- 修复了dll导入的全局变量会被混淆导致丢失__impl前缀的问题
-- 修复了某些情况下配合llvm2019(2022)插件会导致参数重复添加无法编译的问题
-- 修复了x86间接调用炸堆栈的问题
+- Fixed SEH explosion issues after obfuscation
+- Fixed issue where global variables imported by DLLs were obfuscated, losing the `__impl` prefix
+- Fixed issue where certain scenarios with LLVM2019 (2022) plugins caused duplicate parameter additions, preventing compilation
+- Fixed stack overflow issue with x86 indirect calls
 - ...
 ```
 
-## 生成VS2026开发调试环境项目(X86+AArch64 Target)
+## Generate VS2026 debug project (x86+AArch64 Targets)
 
 - Windows + Visual Studio 18 2026 + vcpkg
 
 ```
-install vcpkg and set VCPKG_ROOT PATH
+install vcpkg and set VCPKG_ROOT
 
 vcpkg install zlib:x64-windows-static
 vcpkg install libLZMA:x64-windows-static
 vcpkg install libxml2:x64-windows-static
 
-run x64 Native Tools Command Prompt for VS
-run:
+open x64 Native Tools Command Prompt for VS
+then run:
 
 mkdir build_vsproj
 cd build_vsproj
@@ -128,20 +124,20 @@ cmake -DCMAKE_CXX_FLAGS="-DLIBXML_STATIC /utf-8 /EHsc" ^
       ../llvm
 ```
 
-## 编译(Windows x64 runtime with X86+AArch64 Target)
+## Compilation (Windows x64 runtime with x86+AArch64 Targets)
 
 - Windows + Visual Studio 18 2026 + ninja + vcpkg for libxml2, libLZMA, zlib
 
 ```
-install ninja in your PATH
-install vcpkg and set VCPKG_ROOT PATH
+install ninja and add it to PATH
+install vcpkg and set VCPKG_ROOT
 
 vcpkg install zlib:x64-windows-static
 vcpkg install libLZMA:x64-windows-static
 vcpkg install libxml2:x64-windows-static
 
-run x64 Native Tools Command Prompt for VS
-run:
+open x64 Native Tools Command Prompt for VS
+then run:
 
 mkdir build_ninja
 cd build_ninja
@@ -178,7 +174,7 @@ ninja install
 
 ```
 
-## 编译(macOS AArch64 runtime with AArch64+x86 Target)
+## Compilation (macOS AArch64 runtime with AArch64+x86 Targets)
 
 - macOS + XCode Command Tools + brew + ninja
 
@@ -203,7 +199,7 @@ ninja
 ninja install
 ```
 
-## 编译(Linux x86+AArch64 Target)
+## Compilation (Linux x86+AArch64 Target)
 
 ```
 mkdir build
@@ -226,20 +222,20 @@ ninja -j8
 ninja install
 ```
 
-## 编译时失败怎么办
+## What if compilation fails?
 
-ninja 和 makefile 可以添加 -k 参数，部分文件失败不影响整个clang的使用。
-make install的时候使用-i参数，跳过编译时部分错误的文件。
+Use `-k` with Ninja/Make to continue when some files fail.
+When running `make install`, use `-i` to skip files that failed to build.
 
-## 使用
+## Usage
 
-可通过编译选项开启相应混淆，如启用间接跳转混淆：
+Enable specific obfuscation features via compiler options. For example, to enable indirect jump obfuscation:
 
 ```
 $ path_to_the/build/bin/clang -mllvm -irobf -mllvm --irobf-indbr test.c
 ```
 
-对于使用autotools的工程：
+For Autotools projects:
 
 ```
 $ CC=path_to_the/build/bin/clang or CXX=path_to_the/build/bin/clang
@@ -248,19 +244,19 @@ $ ./configure
 $ make
 ```
 
-对于使用Visual Studio的项目，可以使用Visual Studio插件： https://github.com/KomiMoe/llvm2019
+For Visual Studio projects, you can use the Visual Studio plugin: https://github.com/KomiMoe/llvm2019
 
-## 可以通过**annotate**对特定函数**开启/关闭**指定混淆选项：
+## Enable or Disable Obfuscation Options per Function with **Annotate**:
 
 (Win64-19.1.0-rc3-obf1.5.0-rc2 or later)
 
-annotate的优先级**永远高于**命令行参数
+Annotations **always override** command-line parameters.
 
-`+flag` 表示在当前函数启用某功能, `-flag` 表示在当前函数禁用某功能
+`+flag` indicates enabling a feature for the current function, `-flag` indicates disabling a feature for the current function.
 
-字符串加密基于LLVM Module，所以必须在编译选项中加入字符串加密选项，否则不会开启
+String encryption is module-scoped in LLVM, so the string encryption option must be included in the compilation options; otherwise, it will not be enabled.
 
-可用的annotate flag:
+Available annotation flags:
 
 - `fla`
 - `icall`
@@ -270,7 +266,6 @@ annotate的优先级**永远高于**命令行参数
 - `cfe`
 
 ```cpp
-
 [[clang::annotate("-fla -icall")]]
 int foo(auto a, auto b) {
     return a + b;
@@ -282,15 +277,15 @@ int main(int argc, char** argv) {
     std::printf("hello clang\n");
     return 0;
 }
-// 当然如果你不嫌麻烦也可以用 __attribute((__annotate__(("+indbr"))))
+// Alternatively, you may use __attribute((__annotate__(("+indbr"))))
 ```
 
-如果你不希望对整个程序都启用Pass，那么你可以在编译命令行参数中只添加 `-mllvm -irobf` ，然后使用 **annotate** 控制需要混淆的函数，仅开启 **-irobf** 不使用 **annotate** 不会运行任何混淆Pass
+If you do not wish to enable passes for the entire program, you can add only `-mllvm -irobf` to the compilation command-line parameters and use **annotate** to control which functions to obfuscate. Enabling only **-irobf** without **annotate** will not run any obfuscation passes.
 
-当然，不添加任何混淆命令行参数的情况下，仅使用 **annotate** 也***不会***启用任何Pass
+Using only **annotate** without any obfuscation command-line parameters will **_not_** enable any passes.
 
-你**不能**同时开启和关闭某个混淆参数！
-当然以下情况会报错：
+You **cannot** enable and disable the same obfuscation parameter at the same time!
+The following scenario will result in an error:
 
 ```cpp
 [[clang::annotate("-fla +fla")]]
@@ -299,27 +294,27 @@ int fool(auto a, auto b){
 }
 ```
 
-## 可以使用下列几种方法之一单独控制某个混淆Pass的强度
+## Control the Intensity of Specific Obfuscation Passes Using One of the Following Methods
 
 (Win64-19.1.0-rc3-obf1.5.1-rc5 or later)
 
-如果不指定强度则默认强度为0，annotate的优先级永远高于命令行参数
+If no intensity is specified, the default intensity is 0. The priority of annotations always overrides command-line parameters.
 
-可用的Pass:
+Available passes:
 
-- `icall` (强度范围: 0-3)
-- `indbr` (强度范围: 0-3)
-- `indgv` (强度范围: 0-3)
-- `cie` (强度范围: 0-3)
-- `cfe` (强度范围: 0-3)
+- `icall` (Intensity range: 0-3)
+- `indbr` (Intensity range: 0-3)
+- `indgv` (Intensity range: 0-3)
+- `cie` (Intensity range: 0-3)
+- `cfe` (Intensity range: 0-3)
 
-  1.通过**annotate**对特定函数指定混淆强度：
+1. Set per-function intensity with **annotate**:
 
-`^flag=1` 表示当前函数设置某功能强度等级(此处为1)
+`^flag=1` sets the intensity level for the current function (here, 1)
 
 ```cpp
-//^icall=表示指定icall的强度
-//+icall表示当前函数启用icall混淆, 如果你在命令行中启用了icall则无需添加+icall
+// ^icall= specifies the intensity of icall
+// +icall indicates enabling icall obfuscation for the current function; if you have enabled icall in the command line, you do not need to add +icall
 
 [[clang::annotate("+icall ^icall=3")]]
 int main() {
@@ -328,21 +323,21 @@ int main() {
 }
 ```
 
-2.通过命令行参数指定特定混淆Pass的强度
+2. Set pass intensity via command-line parameters
 
-Eg.间接函数调用,并加密目标函数地址,强度设置为3(`-mllvm -irobf-icall -mllvm -level-icall=3`)
+E.g., indirect function calls with encrypted target function addresses, intensity set to 3 (`-mllvm -irobf-icall -mllvm -level-icall=3`)
 
-## 通过配置文件管理混淆参数
+## Manage Obfuscation Parameters via a Configuration File
 
 (Win64-MT-20.1.7-obf1.7.0 or later)
 
-编译参数加上：`-mllvm -arkari-cfg="配置文件路径|Your config path"`
+Add to compilation parameters: `-mllvm -arkari-cfg="Configuration file path|Your config path"`
 
-路径可以是绝对路径，或者相对于编译器工作目录的相对路径
+The path can be absolute or relative to the compiler's working directory.
 
-配置文件格式为json
+The configuration file format is JSON.
 
-Eg :
+E.g.:
 
 ```json
 {
@@ -381,7 +376,7 @@ Eg :
 
 ## Acknowledgements
 
-Thanks to [JetBrains](https://www.jetbrains.com/?from=KomiMoe) for providing free licenses such as [Resharper C++](https://www.jetbrains.com/resharper-cpp/?from=KomiMoe) for my open-source projects.
+Thanks to [JetBrains](https://www.jetbrains.com/?from=KomiMoe) for providing free licenses (e.g., [ReSharper C++](https://www.jetbrains.com/resharper-cpp/?from=KomiMoe)) for my open-source projects.
 
 [<img src="https://resources.jetbrains.com/storage/products/company/brand/logos/ReSharperCPP_icon.png" alt="ReSharper C++ logo." width=200>](https://www.jetbrains.com/resharper-cpp/?from=KomiMoe)
 
@@ -395,7 +390,7 @@ Thanks to [JetBrains](https://www.jetbrains.com/?from=KomiMoe) for providing fre
  </picture>
 </a>
 
-## 参考资源
+## References
 
 - [Goron](https://github.com/amimo/goron)
 - [Hikari](https://github.com/HikariObfuscator/Hikari)
@@ -403,10 +398,10 @@ Thanks to [JetBrains](https://www.jetbrains.com/?from=KomiMoe) for providing fre
 
 ## License
 
-本项目采用 混合协议 开源，因此使用本项目时，你需要注意以下几点：
+This project is released under a mixed license. Please note:
 
-1. 第三方库代码或修改部分遵循其原始开源许可.
-2. 本项目获取部分项目授权而不受部分约束
-3. 项目其余逻辑代码采用[本仓库开源许可](./LICENSE).
+1. Third-party library code or modified parts adhere to their original open-source licenses.
+2. This project has obtained partial project authorization and is not subject to certain constraints.
+3. The remaining logic code of the project adopts the [license of this repository](./LICENSE).
 
-**本仓库仅用于提升用户对自身代码的保护能力，实现代码逻辑混淆加密的功能，禁止任何项目未经仓库主作者授权基于 komimoe/Arkari 代码开发。使用请遵守当地法律法规，由此造成的问题由使用者和提供违规使用教程者负责。**
+**This repository exists to enhance users' ability to protect their own code via logic obfuscation and encryption. Any development based on KomiMoe/Arkari without the repository owner's permission is prohibited. Please comply with local laws and regulations. Any issues arising from usage are the responsibility of the user and those providing improper-use tutorials.**
