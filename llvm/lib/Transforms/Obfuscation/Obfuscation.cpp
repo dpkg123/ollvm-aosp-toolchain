@@ -9,6 +9,7 @@
 #include "llvm/Transforms/Obfuscation/Obfuscation.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Obfuscation/Utils.h"
+#include "llvm/Transforms/Obfuscation/IRVMModuleTool.h"
 
 using namespace llvm;
 
@@ -107,6 +108,18 @@ struct Obfuscation : public ModulePass {
     return "HikariObfuscationScheduler";
   }
   bool runOnModule(Module &M) override {
+ //添加 vmp
+     vmp::IRVMModuleTool tool;
+     bool changed = tool.run(M);
+     auto st = tool.getStats();
+     llvm::errs() << "changed=" << changed
+                  << " candidates=" << st.NumCandidates
+                  << " emitted=" << st.NumEmitted
+                  << " rewritten=" << st.NumRewritten
+                  << " skipped(pre)=" << st.NumSkippedPre
+                  << " skipped(post)=" << st.NumSkippedPostSimplify
+                  << " skipped(codegen)=" << st.NumSkippedCodegen
+                  << " exceptions=" << st.NumExceptions << "\n";
     TimerGroup *tg =
         new TimerGroup("Obfuscation Timer Group", "Obfuscation Timer Group");
     Timer *timer = new Timer("Obfuscation Timer", "Obfuscation Timer", *tg);
