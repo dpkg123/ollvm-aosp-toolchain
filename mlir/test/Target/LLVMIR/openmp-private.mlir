@@ -103,6 +103,9 @@ llvm.func @parallel_op_private_multi_block(%arg0: !llvm.ptr) {
 // CHECK:  %[[ORIG_PTR_PTR:.*]] = getelementptr { ptr }, ptr %{{.*}}, i32 0, i32 0
 // CHECK:  %[[ORIG_PTR:.*]] = load ptr, ptr %[[ORIG_PTR_PTR]], align 8
 // CHECK:  %[[PRIV_ALLOC:.*]] = alloca float, align 4
+// CHECK-NEXT:   br label %[[PAR_REG:.*]]
+
+// CHECK: [[PAR_REG]]:
 // CHECK:  br label %omp.private.init
 
 // CHECK: omp.private.init:
@@ -124,9 +127,6 @@ llvm.func @parallel_op_private_multi_block(%arg0: !llvm.ptr) {
 // address.
 // CHECK: [[PRIV_CONT]]:
 // CHECK-NEXT:   %[[PRIV_ALLOC3:.*]] = phi ptr [ %[[PRIV_ALLOC2]], %[[PRIV_BB2]] ]
-// CHECK-NEXT:   br label %[[PAR_REG:.*]]
-
-// CHECK: [[PAR_REG]]:
 // CHECK-NEXT:   br label %[[PAR_REG2:.*]]
 
 // Check that the body of the parallel region loads from the private clone.
@@ -153,8 +153,8 @@ omp.private {type = private} @multi_block.privatizer : f32 init {
 // CHECK:         omp.par.region:
 // CHECK:           br label %[[PAR_REG_BEG:.*]]
 // CHECK:         [[PAR_REG_BEG]]:
-// CHECK:           call void @bar(ptr getelementptr (double, ptr @_QQfoo, i64 111))
-// CHECK:           call void @bar(ptr getelementptr (double, ptr @_QQfoo, i64 222))
+// CHECK:           call void @bar(ptr getelementptr (i8, ptr @_QQfoo, i64 888))
+// CHECK:           call void @bar(ptr getelementptr (i8, ptr @_QQfoo, i64 1776))
 llvm.func @lower_region_with_addressof() {
   %0 = llvm.mlir.constant(1 : i64) : i64
   %1 = llvm.alloca %0 x f64 {bindc_name = "u1"} : (i64) -> !llvm.ptr
@@ -240,7 +240,7 @@ omp.declare_reduction @reducer.part : !llvm.ptr alloc {
 llvm.func @_QPequivalence() {
   %0 = llvm.mlir.constant(1 : i64) : i64
   %1 = llvm.alloca %0 x !llvm.array<4 x i8> : (i64) -> !llvm.ptr
-  %2 = llvm.mlir.constant(0 : index) : i64
+  %2 = llvm.mlir.constant(0 : i64) : i64
   %3 = llvm.getelementptr %1[0, %2] : (!llvm.ptr, i64) -> !llvm.ptr, !llvm.array<4 x i8>
   omp.parallel private(@_QFequivalenceEx_firstprivate_ptr_f32 %3 -> %arg0 : !llvm.ptr) {
     %4 = llvm.mlir.constant(3.140000e+00 : f32) : f32
@@ -264,4 +264,44 @@ omp.private {type = firstprivate} @_QFequivalenceEx_firstprivate_ptr_f32 : f32 c
 // Test that we initialize the firstprivate variable.
 // CHECK:   store float %[[HOST_VAL]], ptr %[[PRIV_ALLOC]], align 4
 // Test that we inlined the body of the parallel region.
-// CHECK:   store float 0x{{.*}}, ptr %[[PRIV_ALLOC]], align 4
+// CHECK:   store float 3.140000e+00, ptr %[[PRIV_ALLOC]], align 4
+
+// -----
+
+omp.private {type = private} @_QFEi_private_i32 : i32
+llvm.func @_QPprivate_alloc_with_switch() {
+  %0 = llvm.mlir.constant(1 : i32) : i32
+  %1 = llvm.mlir.constant(30 : i32) : i32
+  %2 = llvm.mlir.constant(1 : i64) : i64
+  %3 = llvm.alloca %2 x i32 {bindc_name = "n"} : (i64) -> !llvm.ptr
+  %4 = llvm.alloca %2 x i32 {bindc_name = "i"} : (i64) -> !llvm.ptr
+  llvm.store %0, %3 : i32, !llvm.ptr
+  %5 = llvm.load %3 : !llvm.ptr -> i32
+  llvm.switch %5 : i32, ^bb1 [
+    1: ^bb1,
+    2: ^bb2
+  ]
+^bb1:  // 2 preds: ^bb0, ^bb0
+  omp.simd private(@_QFEi_private_i32 %4 -> %arg0 : !llvm.ptr) {
+    omp.loop_nest (%arg1) : i32 = (%0) to (%1) inclusive step (%0) {
+      llvm.store %arg1, %arg0 : i32, !llvm.ptr
+      omp.yield
+    }
+  }
+  llvm.br ^bb2
+^bb2:  // 2 preds: ^bb0, ^bb1
+  llvm.return
+}
+
+// CHECK-LABEL: define void @_QPprivate_alloc_with_switch() {
+// CHECK:   br label %[[AFTER_ALLOCA_BLOCK:.*]]
+// CHECK: [[AFTER_ALLOCA_BLOCK]]:
+// CHECK:   switch i32 %{{.*}}, label %[[PRIVATE_INIT_BLOCK:.*]] [
+// CHECK:     i32 1, label %[[PRIVATE_INIT_BLOCK]]
+// CHECK:     i32 2, label %[[EXIT_BLOCK:.*]]
+// CHECK:   ]
+// CHECK: [[PRIVATE_INIT_BLOCK]]:
+// CHECK: omp.private.init:
+// CHECK: omp.simd.region:
+// CHECK: [[EXIT_BLOCK]]:
+// CHECK:   ret void

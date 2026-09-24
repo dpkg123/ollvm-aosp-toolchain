@@ -14,17 +14,15 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/IR/LinalgDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCFDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Tosa/Transforms/Passes.h"
-#include "mlir/Dialect/Tosa/Utils/QuantUtils.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 #define GEN_PASS_DEF_TOSATOLINALGNAMED
@@ -62,7 +60,6 @@ public:
     target.addIllegalOp<tosa::MaxPool2dOp>();
     target.addIllegalOp<tosa::AvgPool2dOp>();
     target.addIllegalOp<tosa::MatMulOp>();
-    target.addIllegalOp<tosa::FullyConnectedOp>();
     target.addIllegalOp<tosa::TransposeOp>();
 
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });

@@ -4,6 +4,7 @@ set(LLVM_LINK_COMPONENTS
   DebugInfoDWARF
   Object
   ObjectYAML
+  ProfileData
   Support
   )
 
@@ -14,6 +15,7 @@ add_llvm_utility(obj2yaml
   dwarf2yaml.cpp
   dxcontainer2yaml.cpp
   elf2yaml.cpp
+  goff2yaml.cpp
   macho2yaml.cpp
   minidump2yaml.cpp
   offload2yaml.cpp

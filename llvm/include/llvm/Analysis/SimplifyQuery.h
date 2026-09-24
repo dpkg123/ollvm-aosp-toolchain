@@ -11,6 +11,7 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 
@@ -68,6 +69,10 @@ struct CondContext {
 };
 
 struct SimplifyQuery {
+private:
+  const Function *CxtF = nullptr;
+
+public:
   const DataLayout &DL;
   const TargetLibraryInfo *TLI = nullptr;
   const DominatorTree *DT = nullptr;
@@ -85,6 +90,7 @@ struct SimplifyQuery {
   /// possible values for uses of undef. If it is false, simplifications are not
   /// allowed to assume a particular value for a use of undef for example.
   bool CanUseUndef = true;
+  bool AllowEphemerals = false;
 
   SimplifyQuery(const DataLayout &DL, const Instruction *CXTI = nullptr)
       : DL(DL), CxtI(CXTI) {}
@@ -109,15 +115,32 @@ struct SimplifyQuery {
     Copy.CxtI = I;
     return Copy;
   }
+  SimplifyQuery getWithFunction(const Function *F) const {
+    SimplifyQuery Copy(*this);
+    Copy.CxtF = F;
+    return Copy;
+  }
+  const Function *getFunction() const {
+    if (CxtF)
+      return CxtF;
+    if (CxtI)
+      return CxtI->getFunction();
+    return nullptr;
+  }
   SimplifyQuery getWithoutUndef() const {
     SimplifyQuery Copy(*this);
     Copy.CanUseUndef = false;
     return Copy;
   }
+  SimplifyQuery allowEphemerals(bool AllowEphemerals) const {
+    SimplifyQuery Copy(*this);
+    Copy.AllowEphemerals = AllowEphemerals;
+    return Copy;
+  }
 
   /// If CanUseUndef is true, returns whether \p V is undef.
   /// Otherwise always return false.
-  bool isUndefValue(Value *V) const;
+  LLVM_ABI bool isUndefValue(Value *V) const;
 
   SimplifyQuery getWithoutDomCondCache() const {
     SimplifyQuery Copy(*this);

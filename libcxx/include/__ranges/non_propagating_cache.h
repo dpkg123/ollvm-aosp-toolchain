@@ -14,8 +14,10 @@
 #include <__iterator/concepts.h>        // indirectly_readable
 #include <__iterator/iterator_traits.h> // iter_reference_t
 #include <__memory/addressof.h>
+#include <__optional/nullopt_t.h>
+#include <__optional/optional.h>
+#include <__type_traits/is_object.h>
 #include <__utility/forward.h>
-#include <optional>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
@@ -36,7 +38,7 @@ namespace ranges {
 // may refer to internal details of the source view.
 template <class _Tp>
   requires is_object_v<_Tp>
-class _LIBCPP_TEMPLATE_VIS __non_propagating_cache {
+class __non_propagating_cache {
   struct __from_tag {};
   struct __forward_tag {};
 

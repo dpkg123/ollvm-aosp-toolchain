@@ -37,6 +37,7 @@ static WasmYAML::Limits makeLimits(const wasm::WasmLimits &Limits) {
   L.Flags = Limits.Flags;
   L.Minimum = Limits.Minimum;
   L.Maximum = Limits.Maximum;
+  L.PageSize = Limits.PageSize;
   return L;
 }
 
@@ -61,6 +62,7 @@ WasmDumper::dumpCustomSection(const WasmSection &WasmSec) {
     DylinkSec->TableSize = Info.TableSize;
     DylinkSec->TableAlignment = Info.TableAlignment;
     DylinkSec->Needed = Info.Needed;
+    DylinkSec->RuntimePath = Info.RuntimePath;
     for (const auto &Imp : Info.ImportInfo)
       DylinkSec->ImportInfo.push_back({Imp.Module, Imp.Field, Imp.Flags});
     for (const auto &Exp : Info.ExportInfo)
@@ -133,7 +135,12 @@ WasmDumper::dumpCustomSection(const WasmSection &WasmSec) {
       Info.Flags = Symbol.Flags;
       switch (Symbol.Kind) {
       case wasm::WASM_SYMBOL_TYPE_DATA:
-        Info.DataRef = Symbol.DataRef;
+        if ((Symbol.Flags & wasm::WASM_SYMBOL_BINDING_MASK) ==
+            wasm::WASM_SYMBOL_BINDING_COMMON) {
+          Info.CommonRef = Symbol.CommonRef;
+        } else {
+          Info.DataRef = Symbol.DataRef;
+        }
         break;
       case wasm::WASM_SYMBOL_TYPE_FUNCTION:
       case wasm::WASM_SYMBOL_TYPE_GLOBAL:

@@ -41,6 +41,12 @@ Coding Guidelines
 
 libc++'s coding guidelines are documented :ref:`here <CodingGuidelines>`.
 
+Procedures for recurring tasks
+==============================
+
+* :ref:`After a WG21 meeting <PostMeetingProcedure>`
+* :ref:`Around a LLVM release <ReleaseProcedure>`
+* :ref:`When a new Standard is introduced <NewStandardProcedure>`
 
 Resources
 =========
@@ -116,7 +122,7 @@ sure you don't forget anything:
 - Did you add all new named declarations to the ``std`` module?
 - If you added a header:
 
-  - Did you add it to ``include/module.modulemap``?
+  - Did you add it to ``include/module.modulemap.in``?
   - Did you add it to ``include/CMakeLists.txt``?
   - If it's a public header, did you update ``utils/libcxx/header_information.py``?
 
@@ -165,7 +171,7 @@ Look for the failed build and select the ``artifacts`` tab. There, download the
 abilist for the platform, e.g.:
 
 * C++<version>.
-* MacOS X86_64 and MacOS arm64 for the Apple platform.
+* macOS X86_64 and macOS arm64 for the Apple platform.
 
 
 Pre-commit CI
@@ -174,10 +180,11 @@ Pre-commit CI
 Introduction
 ------------
 
-Unlike most parts of the LLVM project, libc++ uses a pre-commit CI [#]_. This
-CI is hosted on `Buildkite <https://buildkite.com/llvm-project/libcxx-ci>`__ and
-the build results are visible in the review on GitHub. Please make sure
-the CI is green before committing a patch.
+Unlike most parts of the LLVM project, libc++ uses a pre-commit CI [#]_. Some of
+this CI is hosted on `Buildkite <https://buildkite.com/llvm-project/libcxx-ci>`__,
+but some has migrated to the LLVM CI infrastructure. The build results are
+visible in the review on GitHub. Please make sure the CI is green before
+committing a patch.
 
 The CI tests libc++ for all :ref:`supported platforms <SupportedPlatforms>`.
 The build is started for every commit added to a Pull Request. A complete CI
@@ -236,7 +243,7 @@ Below is a short description of the most interesting CI builds [#]_:
 * ``Santitizers`` tests libc++ using the Clang sanitizers.
 * ``Parts disabled`` tests libc++ with certain libc++ features disabled.
 * ``Windows`` tests libc++ using MinGW and clang-cl.
-* ``Apple`` tests libc++ on MacOS.
+* ``Apple`` tests libc++ on macOS.
 * ``ARM`` tests libc++ on various Linux ARM platforms.
 * ``AIX`` tests libc++ on AIX.
 
@@ -246,20 +253,50 @@ Below is a short description of the most interesting CI builds [#]_:
 Infrastructure
 --------------
 
-All files of the CI infrastructure are in the directory ``libcxx/utils/ci``.
-Note that quite a bit of this infrastructure is heavily Linux focused. This is
-the platform used by most of libc++'s Buildkite runners and developers.
+The files for the CI infrastructure are split between the llvm-project
+and the llvm-zorg repositories. All files of the CI infrastructure in
+the llvm-project are in the directory ``libcxx/utils/ci``. Note that
+quite a bit of this infrastructure is heavily Linux focused. This is
+the platform used by most of libc++'s Buildkite runners and
+developers.
 
-Dockerfile
-~~~~~~~~~~
+Dockerfile/Container Images
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Contains the Docker image for the Ubuntu CI. Because the same Docker image is
 used for the ``main`` and ``release`` branch, it should contain no hard-coded
-versions.  It contains the used versions of Clang, various clang-tools,
+versions. It contains the used versions of Clang, various clang-tools,
 GCC, and CMake.
 
 .. note:: This image is pulled from Docker hub and not rebuild when changing
    the Dockerfile.
+
+Updating the CI testing container images
+----------------------------------------
+
+On pushing changes to the container image definition to ``main``, a new version
+of both the ``libcxx-linux-builder`` and the ``libcxx-android-builder`` images
+will be built and pushed to https://github.com/llvm/llvm-project/packages.
+
+You can then update the image used by the actual runners by changing the image
+inside of the libc++ workflow definitions:
+
+* ``libcxx-pr-conformance-tests.yaml``
+* ``libcxx-pr-test-tools.yml``
+
+When creating a PR with changes modifying the container image, the CI results
+for that PR will be from the newly specified image.
+
+Monitoring premerge testing performance
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The llvm-premerge-libcxx runners mentioned above collect metrics regarding the
+time the tests spend queued up before they start running and also the time it
+takes the tests to actually complete running. These metrics are collected and
+aggregated (based on stage and PR), and the results can be seen at the
+`Libc++ Premerge Testing dashboard
+<https://llvm.grafana.net/public-dashboards/0bd453e8b3034733a1b0ff8c7728086d>`__
+.
 
 run-buildbot-container
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -271,7 +308,7 @@ your system.
 run-buildbot
 ~~~~~~~~~~~~
 
-Contains the build script executed on Buildkite. This script can be executed
+This is the script executed by the CI runners. This script can be executed
 locally or inside ``run-buildbot-container``. The script must be called with
 the target to test. For example, ``run-buildbot generic-cxx20`` will build
 libc++ and test it using C++20.

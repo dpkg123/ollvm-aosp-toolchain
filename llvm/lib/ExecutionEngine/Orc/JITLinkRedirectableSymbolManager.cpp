@@ -47,7 +47,10 @@ void JITLinkRedirectableSymbolManager::emitRedirectableSymbols(
     Ptr.setScope(jitlink::Scope::Hidden);
     auto &Stub = PtrJumpStubCreator(*G, StubsSection, Ptr);
     Stub.setName(Name);
-    Stub.setScope(jitlink::Scope::Default);
+    Stub.setScope(Def.getFlags().isExported() ? jitlink::Scope::Default
+                                              : jitlink::Scope::Hidden);
+    Stub.setLinkage(!Def.getFlags().isWeak() ? jitlink::Linkage::Strong
+                                             : jitlink::Linkage::Weak);
     NewSymbols[std::move(PtrName)] = JITSymbolFlags();
   }
 
@@ -83,8 +86,5 @@ Error JITLinkRedirectableSymbolManager::redirect(JITDylib &JD,
     PtrWrites.push_back({PtrSym.getAddress(), DestSym.getAddress()});
   }
 
-  return ObjLinkingLayer.getExecutionSession()
-      .getExecutorProcessControl()
-      .getMemoryAccess()
-      .writePointers(PtrWrites);
+  return MemAccess.writePointers(PtrWrites);
 }

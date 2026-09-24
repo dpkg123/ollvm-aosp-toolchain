@@ -36,6 +36,7 @@ def PDLInterp_Dialect : Dialect {
   }];
 
   let name = "pdl_interp";
+  let useStrictPropertiesInAssemblyFormat = 1;
   let cppNamespace = "::mlir::pdl_interp";
   let dependentDialects = ["pdl::PDLDialect"];
   let extraClassDeclaration = [{
@@ -60,6 +61,7 @@ class PDLInterp_Op<string mnemonic, list<Trait> traits = []> :
 
 //===----------------------------------------------------------------------===//
 // PDLInterp_PredicateOp
+//===----------------------------------------------------------------------===//
 
 // Check operations evaluate a predicate on a positional value and then
 // conditionally branch on the result.
@@ -70,6 +72,7 @@ class PDLInterp_PredicateOp<string mnemonic, list<Trait> traits = []> :
 
 //===----------------------------------------------------------------------===//
 // PDLInterp_SwitchOp
+//===----------------------------------------------------------------------===//
 
 // Switch operations evaluate a predicate on a positional value and then
 // conditionally branch on the result.
@@ -108,7 +111,8 @@ def PDLInterp_ApplyConstraintOp : PDLInterp_PredicateOp<"apply_constraint"> {
                        DefaultValuedAttr<BoolAttr, "false">:$isNegated);
   let results = (outs Variadic<PDL_AnyType>:$results);
   let assemblyFormat = [{
-    $name `(` $args `:` type($args) `)` (`:` type($results)^)? attr-dict 
+    $name `(` $args `:` type($args) `)`
+    (`is_negated` `=` $isNegated^)? (`:` type($results)^)? attr-dict
     `->` successors
   }];
 }
@@ -637,7 +641,7 @@ def PDLInterp_ForEachOp
 //===----------------------------------------------------------------------===//
 
 def PDLInterp_FuncOp : PDLInterp_Op<"func", [
-    FunctionOpInterface, IsolatedFromAbove
+    SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove
   ]> {
   let summary = "PDL Interpreter Function Operation";
   let description = [{
@@ -661,7 +665,8 @@ def PDLInterp_FuncOp : PDLInterp_Op<"func", [
     SymbolNameAttr:$sym_name,
     TypeAttrOf<FunctionType>:$function_type,
     OptionalAttr<DictArrayAttr>:$arg_attrs,
-    OptionalAttr<DictArrayAttr>:$res_attrs
+    OptionalAttr<DictArrayAttr>:$res_attrs,
+    OptionalAttr<StrAttr>:$sym_visibility
   );
   let regions = (region MinSizedRegion<1>:$body);
 

@@ -23,6 +23,7 @@ include "mlir/IR/OpBase.td"
 
 def ArmNeon_Dialect : Dialect {
   let name = "arm_neon";
+  let useStrictPropertiesInAssemblyFormat = 1;
   let cppNamespace = "::mlir::arm_neon";
 
   // Note: this does not need to depend on LLVMDialect as long as functions in
@@ -218,6 +219,34 @@ def UsmmlaOp : ArmNeon_OverloadedOperandsWithOneResultIntrOp<"usmmla",[1], [
           NeonVectorOfLength<16, I8>:$src2
   );
   let results = (outs NeonVectorOfLength<4, I32>:$res);
+  let assemblyFormat =
+    "$acc `,` $src1 `,` $src2 attr-dict `:` type($src1) `to` type($res)";
+}
+
+def BfmmlaOp : ArmNeon_IntrOp<"bfmmla", [], [], 1, [
+                 Pure,
+                 AllTypesMatch<["src1", "src2"]>,
+                 AllTypesMatch<["acc", "res"]>,
+               ]> {
+  let summary = "BFloat16 matrix multiply-accumulate to single-precision";
+  let description = [{
+    BFMMLA: BFloat16 matrix multiply-accumulate to single-precision.
+
+    The operation multiplies the 2x4 BFloat16 matrix in the first source vector
+    with the 4x2 BFloat16 matrix in the second source vector, then accumulates
+    this intermediate result with the 2x2 Float32 matrix in the accumulator
+    vector, yielding the final 2x2 Float32 result.
+
+    Source:
+    https://developer.arm.com/architectures/instruction-sets/intrinsics/vbfmmlaq_f32
+  }];
+  // Supports (vector<8xbf16>, vector<8xbf16>) -> (vector<2xf32>)
+  let arguments = (ins
+    NeonVectorOfLength<4, F32>:$acc,
+    NeonVectorOfLength<8, BF16>:$src1,
+    NeonVectorOfLength<8, BF16>:$src2
+  );
+  let results = (outs NeonVectorOfLength<4, F32>:$res);
   let assemblyFormat =
     "$acc `,` $src1 `,` $src2 attr-dict `:` type($src1) `to` type($res)";
 }

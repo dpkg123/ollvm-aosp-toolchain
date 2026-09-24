@@ -88,11 +88,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cfi-fixup"
 
-char CFIFixup::ID = 0;
+char CFIFixupLegacy::ID = 0;
 
-INITIALIZE_PASS(CFIFixup, "cfi-fixup",
+INITIALIZE_PASS(CFIFixupLegacy, "cfi-fixup",
                 "Insert CFI remember/restore state instructions", false, false)
-FunctionPass *llvm::createCFIFixup() { return new CFIFixup(); }
+FunctionPass *llvm::createCFIFixupLegacy() { return new CFIFixupLegacy(); }
 
 static bool isPrologueCFIInstruction(const MachineInstr &MI) {
   return MI.getOpcode() == TargetOpcode::CFI_INSTRUCTION &&
@@ -131,6 +131,9 @@ struct BlockFlags {
   bool StrongNoFrameOnEntry : 1;
   bool HasFrameOnEntry : 1;
   bool HasFrameOnExit : 1;
+  BlockFlags()
+      : Reachable(false), StrongNoFrameOnEntry(false), HasFrameOnEntry(false),
+        HasFrameOnExit(false) {}
 };
 
 // Most functions will have <= 32 basic blocks.
@@ -141,7 +144,7 @@ using BlockFlagsVector = SmallVector<BlockFlags, 32>;
 static BlockFlagsVector
 computeBlockInfo(const MachineFunction &MF,
                  const MachineBasicBlock *PrologueBlock) {
-  BlockFlagsVector BlockInfo(MF.getNumBlockIDs(), {false, false, false, false});
+  BlockFlagsVector BlockInfo(MF.getNumBlockIDs());
   BlockInfo[0].Reachable = true;
   BlockInfo[0].StrongNoFrameOnEntry = true;
 
@@ -249,6 +252,11 @@ fixupBlock(MachineBasicBlock &CurrBB, const BlockFlagsVector &BlockInfo,
   if (!Info.Reachable)
     return false;
 
+  // If we don't need to perform full CFI fix up, we only need to fix up the
+  // first basic block in the section.
+  if (!TFL.enableFullCFIFixup(MF) && !CurrBB.isBeginSection())
+    return false;
+
   // If the previous block and the current block are in the same section,
   // the frame info will propagate from the previous block to the current one.
   const BlockFlags &PrevInfo =
@@ -293,7 +301,7 @@ fixupBlock(MachineBasicBlock &CurrBB, const BlockFlagsVector &BlockInfo,
   return true;
 }
 
-bool CFIFixup::runOnMachineFunction(MachineFunction &MF) {
+static bool runImpl(MachineFunction &MF) {
   if (!MF.getSubtarget().getFrameLowering()->enableCFIFixup(MF))
     return false;
 
@@ -333,4 +341,14 @@ bool CFIFixup::runOnMachineFunction(MachineFunction &MF) {
   }
 
   return Change;
+}
+
+PreservedAnalyses CFIFixupPass::run(MachineFunction &MF,
+                                    MachineFunctionAnalysisManager &) {
+  runImpl(MF);
+  return PreservedAnalyses::all();
+}
+
+bool CFIFixupLegacy::runOnMachineFunction(MachineFunction &MF) {
+  return runImpl(MF);
 }

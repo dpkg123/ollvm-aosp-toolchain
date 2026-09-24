@@ -2,9 +2,6 @@
 GWP-ASan
 ========
 
-.. contents::
-   :local:
-   :depth: 2
 
 Introduction
 ============
@@ -31,7 +28,7 @@ Unlike `AddressSanitizer <https://clang.llvm.org/docs/AddressSanitizer.html>`_,
 GWP-ASan does not induce a significant performance overhead. ASan often requires
 the use of dedicated canaries to be viable in production environments, and as
 such is often impractical. Moreover, ASan's runtime is not developed with
-security consideration in mind, making compiled binaries more vulnerable to
+security considerations in mind, making compiled binaries more vulnerable to
 exploits.
 
 However, GWP-ASan is only capable of finding a subset of the memory issues
@@ -122,7 +119,7 @@ Usage
 =====
 
 GWP-ASan already ships by default in the
-`Scudo Hardened Allocator <https://llvm.org/docs/ScudoHardenedAllocator.html>`_,
+:doc:`Scudo Hardened Allocator <ScudoHardenedAllocator>`,
 so building with ``-fsanitize=scudo`` is the quickest and easiest way to try out
 GWP-ASan.
 

@@ -23,6 +23,7 @@ def ControlFlow_Dialect : Dialect {
   let name = "cf";
   let cppNamespace = "::mlir::cf";
   let dependentDialects = ["arith::ArithDialect"];
+  let useStrictPropertiesInAssemblyFormat = 1;
   let description = [{
     This dialect contains low-level, i.e. non-region based, control flow
     constructs. These constructs generally represent control flow directly
@@ -112,10 +113,11 @@ def BranchOp : CF_Op<"br", [
 // CondBranchOp
 //===----------------------------------------------------------------------===//
 
-def CondBranchOp : CF_Op<"cond_br",
-    [AttrSizedOperandSegments,
-     DeclareOpInterfaceMethods<BranchOpInterface, ["getSuccessorForOperands"]>,
-     Pure, Terminator]> {
+def CondBranchOp
+    : CF_Op<"cond_br", [AttrSizedOperandSegments,
+                        DeclareOpInterfaceMethods<
+                            BranchOpInterface, ["getSuccessorForOperands"]>,
+                        WeightedBranchOpInterface, Pure, Terminator]> {
   let summary = "Conditional branch operation";
   let description = [{
     The `cf.cond_br` terminator operation represents a conditional branch on a
@@ -144,22 +146,33 @@ def CondBranchOp : CF_Op<"cond_br",
     ```
   }];
 
-  let arguments = (ins I1:$condition,
-                       Variadic<AnyType>:$trueDestOperands,
-                       Variadic<AnyType>:$falseDestOperands);
+  let arguments = (ins I1:$condition, Variadic<AnyType>:$trueDestOperands,
+      Variadic<AnyType>:$falseDestOperands,
+      OptionalAttr<DenseI32ArrayAttr>:$branch_weights);
   let successors = (successor AnySuccessor:$trueDest, AnySuccessor:$falseDest);
 
-  let builders = [
-    OpBuilder<(ins "Value":$condition, "Block *":$trueDest,
-      "ValueRange":$trueOperands, "Block *":$falseDest,
-      "ValueRange":$falseOperands), [{
-      build($_builder, $_state, condition, trueOperands, falseOperands, trueDest,
-            falseDest);
+  let builders = [OpBuilder<(ins "Value":$condition, "Block *":$trueDest,
+                                "ValueRange":$trueOperands,
+                                "Block *":$falseDest,
+                                "ValueRange":$falseOperands,
+                                CArg<"ArrayRef<int32_t>", "{}">:$branchWeights),
+                            [{
+      DenseI32ArrayAttr weights;
+      if (!branchWeights.empty())
+        weights = $_builder.getDenseI32ArrayAttr(branchWeights);
+      build($_builder, $_state, condition, trueOperands, falseOperands,
+            weights, trueDest, falseDest);
     }]>,
-    OpBuilder<(ins "Value":$condition, "Block *":$trueDest,
-      "Block *":$falseDest, CArg<"ValueRange", "{}">:$falseOperands), [{
-      build($_builder, $_state, condition, trueDest, ValueRange(), falseDest,
-            falseOperands);
+                  OpBuilder<(ins "Value":$condition, "Block *":$trueDest,
+                                "Block *":$falseDest,
+                                CArg<"ValueRange", "{}">:$falseOperands,
+                                CArg<"ArrayRef<int32_t>", "{}">:$branchWeights),
+                            [{
+      DenseI32ArrayAttr weights;
+      if (!branchWeights.empty())
+        weights = $_builder.getDenseI32ArrayAttr(branchWeights);
+      build($_builder, $_state, condition, ValueRange(), falseOperands,
+            weights, trueDest, falseDest);
     }]>];
 
   let extraClassDeclaration = [{
@@ -216,7 +229,7 @@ def CondBranchOp : CF_Op<"cond_br",
 
   let hasCanonicalizer = 1;
   let assemblyFormat = [{
-    $condition `,`
+    $condition (`weights` `(` $branch_weights^ `)` )? `,`
     $trueDest (`(` $trueDestOperands^ `:` type($trueDestOperands) `)`)? `,`
     $falseDest (`(` $falseDestOperands^ `:` type($falseDestOperands) `)`)?
     attr-dict

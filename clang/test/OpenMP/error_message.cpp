@@ -4,6 +4,35 @@
 // RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=51 -ferror-limit 100 %s -Wuninitialized
 // RUN: %clang_cc1 -verify -fopenmp-simd -fopenmp-version=60 -ferror-limit 100 %s -Wuninitialized
 
+// RUN: %clang_cc1 -verify -std=c++20 -fopenmp -fopenmp-version=60 -ferror-limit 100 %s -Wuninitialized
+
+// Test outside of an executable context.
+#pragma omp error severity(warning) message("msg") at(compilation) // expected-warning {{msg}}
+
+// GH140338
+// expected-warning@+2 {{expected string in 'clause message' - ignoring}}
+// expected-error@+1 {{ERROR}}
+#pragma omp error message(L"")
+// expected-warning@+2 {{expected string in 'clause message' - ignoring}}
+// expected-error@+1 {{ERROR}}
+#pragma omp error message(L"msg")
+// expected-warning@+2 {{expected string in 'clause message' - ignoring}}
+// expected-error@+1 {{ERROR}}
+#pragma omp error message(u"msg")
+// expected-warning@+2 {{expected string in 'clause message' - ignoring}}
+// expected-error@+1 {{ERROR}}
+#pragma omp error message(U"msg")
+// expected-warning@+2 {{expected string in 'clause message' - ignoring}}
+// expected-warning@+1 {{WARNING}}
+#pragma omp error severity(warning) message(L"msg")
+#ifdef __cpp_char8_t
+// expected-warning@+5 {{expected string in 'clause message' - ignoring}}
+// expected-error@+4 {{ERROR}}
+#else
+// expected-error@+2 {{msg}}
+#endif
+#pragma omp error message(u8"msg")
+
 template <class T>
 T tmain(T argc) {
   if (argc)
@@ -112,8 +141,12 @@ if (1)
 // expected-error@+1 {{GPU compiler is needed.}}
 #pragma omp error message("GPU compiler is needed.") message("GPU compiler is needed.") // expected-error {{directive '#pragma omp error' cannot contain more than one 'message' clause}}
   int a;
-// expected-warning@+1 {{expected string literal in 'clause message' - ignoring}}
+// expected-warning@+1 {{expected string in 'clause message' - ignoring}}
 #pragma omp error message(a) // expected-error {{ERROR}}
+  char str[] = "msg";
+// expected-warning@+1 {{expected string literal in 'clause message' - ignoring}}
+#pragma omp error message(str) // expected-error {{ERROR}}
+#pragma omp error at(execution) message(str) // no error
 // expected-error@+1 {{ERROR}}
 #pragma omp error message() // expected-error {{expected expression}}
   return T();
@@ -194,6 +227,9 @@ label1 : {
 if (1)
   label2:
 #pragma omp error // expected-error {{'#pragma omp error' cannot be an immediate substatement}}
+
+// expected-warning@+1 {{expected string in 'clause message' - ignoring}}
+#pragma omp error at(execution) message(L"msg") // no error
 
   return tmain(argc);// expected-note {{in instantiation of function template specialization 'tmain<int>' requested here}}
 }

@@ -35,7 +35,7 @@ cl::OptionCategory Cat("yaml2obj Options");
 cl::opt<std::string> Input(cl::Positional, cl::desc("<input file>"),
                            cl::init("-"), cl::cat(Cat));
 
-cl::list<std::string>
+static cl::list<std::string>
     D("D", cl::Prefix,
       cl::desc("Defined the specified macros to their specified "
                "definition. The syntax is <macro>=<definition>"),
@@ -49,11 +49,11 @@ cl::opt<unsigned>
            cl::desc("Read specified document from input (default = 1)"),
            cl::cat(Cat));
 
-static cl::opt<uint64_t> MaxSize(
-    "max-size", cl::init(10 * 1024 * 1024),
-    cl::desc(
-        "Sets the maximum allowed output size (0 means no limit) [ELF only]"),
-    cl::cat(Cat));
+static cl::opt<uint64_t>
+    MaxSize("max-size", cl::init(10 * 1024 * 1024),
+            cl::desc("Sets the maximum allowed output size (0 means no limit) "
+                     "[ELF and COFF only]"),
+            cl::cat(Cat));
 
 cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
                                     cl::value_desc("filename"), cl::init("-"),
@@ -115,10 +115,11 @@ int main(int argc, char **argv) {
   cl::HideUnrelatedOptions(Cat);
   cl::ParseCommandLineOptions(
       argc, argv, "Create an object file from a YAML description", nullptr,
-      nullptr, /*LongOptionsUseDoubleDash=*/true);
+      nullptr, nullptr, /*LongOptionsUseDoubleDash=*/true);
 
-  auto ErrHandler = [](const Twine &Msg) {
-    WithColor::error(errs(), "yaml2obj") << Msg << "\n";
+  constexpr StringRef ProgName = "yaml2obj";
+  auto ErrHandler = [&](const Twine &Msg) {
+    WithColor::error(errs(), ProgName) << Msg << "\n";
   };
 
   std::error_code EC;
@@ -131,8 +132,10 @@ int main(int argc, char **argv) {
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> Buf =
       MemoryBuffer::getFileOrSTDIN(Input, /*IsText=*/true);
-  if (!Buf)
+  if (std::error_code EC = Buf.getError()) {
+    WithColor::error(errs(), ProgName) << Input << ": " << EC.message() << '\n';
     return 1;
+  }
 
   std::optional<std::string> Buffer =
       preprocess(Buf.get()->getBuffer(), ErrHandler);

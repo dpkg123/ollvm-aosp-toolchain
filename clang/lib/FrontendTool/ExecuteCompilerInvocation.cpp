@@ -11,27 +11,35 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Config/config.h"
-#include "clang/Driver/Options.h"
 #include "clang/ExtractAPI/FrontendActions.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendActions.h"
-#include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
+#include "clang/Frontend/SSAFOptions.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/FrontendTool/Utils.h"
+#include "clang/Options/Options.h"
 #include "clang/Rewrite/Frontend/FrontendActions.h"
+#include "clang/ScalableStaticAnalysis/Frontend/SourceTransformationFrontendAction.h"
+#include "clang/ScalableStaticAnalysis/Frontend/TUSummaryExtractorFrontendAction.h"
+#include "clang/ScalableStaticAnalysis/SSAFForceLinker.h" // IWYU pragma: keep
+#include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "clang/StaticAnalyzer/Frontend/AnalyzerHelpFlags.h"
 #include "clang/StaticAnalyzer/Frontend/FrontendActions.h"
 #include "llvm/Option/OptTable.h"
-#include "llvm/Option/Option.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #if CLANG_ENABLE_CIR
+#include "mlir/IR/AsmState.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/Pass/PassManager.h"
+#include "clang/CIR/Dialect/Passes.h"
 #include "clang/CIR/FrontendAction/CIRGenAction.h"
 #endif
 
@@ -62,13 +70,24 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     return std::make_unique<DumpCompilerOptionsAction>();
   case DumpRawTokens:          return std::make_unique<DumpRawTokensAction>();
   case DumpTokens:             return std::make_unique<DumpTokensAction>();
-  case EmitAssembly:           return std::make_unique<EmitAssemblyAction>();
-  case EmitBC:                 return std::make_unique<EmitBCAction>();
+  case EmitAssembly:
+#if CLANG_ENABLE_CIR
+    if (UseCIR)
+      return std::make_unique<cir::EmitAssemblyAction>();
+#endif
+    return std::make_unique<EmitAssemblyAction>();
+  case EmitBC:
+#if CLANG_ENABLE_CIR
+    if (UseCIR)
+      return std::make_unique<cir::EmitBCAction>();
+#endif
+    return std::make_unique<EmitBCAction>();
   case EmitCIR:
 #if CLANG_ENABLE_CIR
     return std::make_unique<cir::EmitCIRAction>();
 #else
-    llvm_unreachable("CIR suppport not built into clang");
+    CI.getDiagnostics().Report(diag::err_fe_cir_not_built);
+    return nullptr;
 #endif
   case EmitHTML:               return std::make_unique<HTMLPrintAction>();
   case EmitLLVM: {
@@ -80,7 +99,12 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
   }
   case EmitLLVMOnly:           return std::make_unique<EmitLLVMOnlyAction>();
   case EmitCodeGenOnly:        return std::make_unique<EmitCodeGenOnlyAction>();
-  case EmitObj:                return std::make_unique<EmitObjAction>();
+  case EmitObj:
+#if CLANG_ENABLE_CIR
+    if (UseCIR)
+      return std::make_unique<cir::EmitObjAction>();
+#endif
+    return std::make_unique<EmitObjAction>();
   case ExtractAPI:
     return std::make_unique<ExtractAPIAction>();
   case FixIt:                  return std::make_unique<FixItAction>();
@@ -98,8 +122,8 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
   case InitOnly:               return std::make_unique<InitOnlyAction>();
   case ParseSyntaxOnly:        return std::make_unique<SyntaxOnlyAction>();
   case ModuleFileInfo:         return std::make_unique<DumpModuleInfoAction>();
-  case VerifyPCH:              return std::make_unique<VerifyPCHAction>();
-  case TemplightDump:          return std::make_unique<TemplightDumpAction>();
+  case VerifyPCH:
+    return std::make_unique<VerifyPCHAction>();
 
   case PluginAction: {
     for (const FrontendPluginRegistry::entry &Plugin :
@@ -163,6 +187,9 @@ CreateFrontendAction(CompilerInstance &CI) {
 
   const FrontendOptions &FEOpts = CI.getFrontendOpts();
 
+  if (CI.getLangOpts().HLSL)
+    Act = std::make_unique<HLSLFrontendAction>(std::move(Act));
+
   if (FEOpts.FixAndRecompile) {
     Act = std::make_unique<FixItRecompile>(std::move(Act));
   }
@@ -185,17 +212,34 @@ CreateFrontendAction(CompilerInstance &CI) {
     Act = std::make_unique<ASTMergeAction>(std::move(Act),
                                             FEOpts.ASTMergeFiles);
 
+  if (!CI.getSSAFOpts().TUSummaryFile.empty()) {
+    Act = std::make_unique<ssaf::TUSummaryExtractorFrontendAction>(
+        std::move(Act));
+  }
+  // Enter the source-transformation action when the transformation option is
+  // set, and also when only an output option (--ssaf-src-edit-file= /
+  // --ssaf-transformation-report-file=) is set — the action's
+  // reportOrphanOptionMisuse then diagnoses that as a reverse orphan rather
+  // than silently ignoring the option.
+  if (!CI.getSSAFOpts().SourceTransformation.empty() ||
+      !CI.getSSAFOpts().SrcEditFile.empty() ||
+      !CI.getSSAFOpts().TransformationReportFile.empty()) {
+    Act = std::make_unique<ssaf::SourceTransformationFrontendAction>(
+        std::move(Act));
+  }
   return Act;
 }
 
 bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
+  unsigned NumErrorsBefore = Clang->getDiagnostics().getNumErrors();
+
   // Honor -help.
   if (Clang->getFrontendOpts().ShowHelp) {
-    driver::getDriverOptTable().printHelp(
+    getDriverOptTable().printHelp(
         llvm::outs(), "clang -cc1 [options] file...",
         "LLVM 'Clang' Compiler: http://clang.llvm.org",
         /*ShowHidden=*/false, /*ShowAllAliases=*/false,
-        llvm::opt::Visibility(driver::options::CC1Option));
+        llvm::opt::Visibility(options::CC1Option));
     return true;
   }
 
@@ -220,7 +264,9 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
     for (unsigned i = 0; i != NumArgs; ++i)
       Args[i + 1] = Clang->getFrontendOpts().LLVMArgs[i].c_str();
     Args[NumArgs + 1] = nullptr;
-    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get());
+    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get(), /*Overview=*/"",
+                                      /*Errs=*/nullptr,
+                                      /*VFS=*/&Clang->getVirtualFileSystem());
   }
 
 #if CLANG_ENABLE_STATIC_ANALYZER
@@ -255,9 +301,30 @@ bool ExecuteCompilerInvocation(CompilerInstance *Clang) {
   }
 #endif
 
-  // If there were errors in processing arguments, don't do anything else.
-  if (Clang->getDiagnostics().hasErrorOccurred())
+#if CLANG_ENABLE_CIR
+  if (!Clang->getFrontendOpts().MLIRArgs.empty()) {
+    mlir::registerCIRPasses();
+    mlir::registerMLIRContextCLOptions();
+    mlir::registerPassManagerCLOptions();
+    mlir::registerAsmPrinterCLOptions();
+    unsigned NumArgs = Clang->getFrontendOpts().MLIRArgs.size();
+    auto Args = std::make_unique<const char *[]>(NumArgs + 2);
+    Args[0] = "clang (MLIR option parsing)";
+    for (unsigned i = 0; i != NumArgs; ++i)
+      Args[i + 1] = Clang->getFrontendOpts().MLIRArgs[i].c_str();
+    Args[NumArgs + 1] = nullptr;
+    llvm::cl::ParseCommandLineOptions(NumArgs + 1, Args.get(),
+                                      /*Description=*/"", /*Errs=*/nullptr,
+                                      &Clang->getVirtualFileSystem());
+  }
+#endif
+
+  // If there were errors in the above, don't do anything else.
+  // This intentionally ignores errors emitted before this function to
+  // accommodate lenient callers that decided to make progress despite errors.
+  if (Clang->getDiagnostics().getNumErrors() != NumErrorsBefore)
     return false;
+
   // Create and execute the frontend action.
   std::unique_ptr<FrontendAction> Act(CreateFrontendAction(*Clang));
   if (!Act)
