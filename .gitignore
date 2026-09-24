@@ -90,3 +90,7 @@ pythonenv*
 /clang/utils/analyzer/projects/*/RefScanBuildResults
 # automodapi puts generated documentation files here.
 /lldb/docs/python_api/
+
+# .history files
+*/.history/*
+.history/*
