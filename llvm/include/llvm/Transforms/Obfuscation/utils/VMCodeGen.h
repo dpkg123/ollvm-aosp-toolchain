@@ -35,6 +35,7 @@ enum : uint8_t {
   OP_ALLOCA = 0x01,
   OP_LOAD   = 0x02,
   OP_STORE  = 0x03,
+  OP_SELECT = 0x0C,
   OP_GEP    = 0x05,
   OP_CMP    = 0x06,
   OP_CAST   = 0x07,
@@ -49,6 +50,7 @@ enum : uint8_t {
 static_assert(OP_ALLOCA   == VM_OP_ALLOCA &&
               OP_LOAD     == VM_OP_LOAD   &&
               OP_STORE    == VM_OP_STORE  &&
+              OP_SELECT   == VM_OP_SELECT &&
               OP_GEP      == VM_OP_GEP    &&
               OP_CMP      == VM_OP_CMP    &&
               OP_CAST     == VM_OP_CAST   &&
@@ -305,6 +307,7 @@ private:
       case Instruction::UncondBr:
       case Instruction::CondBr:  return t_br(I);
       case Instruction::Ret:     return t_ret(cast<ReturnInst>(I));
+      case Instruction::Select:  return t_sel(cast<SelectInst>(I));
       case Instruction::BitCast:
       case Instruction::PtrToInt:
       case Instruction::IntToPtr:
@@ -508,6 +511,16 @@ private:
       uint32_t posF = (uint32_t)Code.size(); p32(Code, 0);
       BrFixups.push_back({posF, I.getSuccessor(1)});
     }
+  }
+
+  // ===== SELECT: dst = cond ? trueVal : falseVal（槽内统一为 64 位字/位模式）=====
+  void t_sel(llvm::SelectInst &I) {
+    uint32_t dst = allocSlot(&I, I.getType());
+    emitOp(OP_SELECT);
+    p32(Code, dst);
+    encodeValue(I.getCondition());
+    encodeValue(I.getTrueValue());
+    encodeValue(I.getFalseValue());
   }
 
   void t_ret(llvm::ReturnInst &I) {
