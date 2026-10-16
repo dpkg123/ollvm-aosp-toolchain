@@ -157,7 +157,6 @@ typedef struct {
     uint32_t slots_bytes;
     arena_node *arena;
     uint64_t steps;
-    uint8_t dec[256];      // wire opcode byte -> canonical opcode (0 = invalid)
 } vm_frame;
 
 #define VM_MAX_DYN_ARGS 256
@@ -168,7 +167,7 @@ static int vm_trace_enabled(void) {              // absorbed from VMP.h: VMP_TRA
     return cached;
 }
 #define VTRACE(...) do { if (vm_trace_enabled()) { \
-    fprintf(stderr, "[vm] step=%lu pc=%u ", (unsigned long)f.steps, pc); \
+    fprintf(stderr, "[vm] step=%lu pc=%u ", (unsigned long)f->steps, (unsigned)*pc); \
     fprintf(stderr, __VA_ARGS__); } } while (0)
 
 static void vm_fatal(const vm_frame *f, uint32_t pc, const char *why) {
@@ -425,10 +424,280 @@ static uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v) 
 }
 
 // ---------------------------------------------------------------------------
+// opcode handlers (动态分发，展望②)
+//
+// 每个 opcode 的执行体是一个独立函数；取指后不再走静态 switch，而是查一次
+// 调用内动态构建的分发表 lut[wire] -> 槽位 -> htab[槽位] 的函数指针：
+//
+//   * 构建期置换（-irobf-irvm-dispatch）：发射侧把规范操作码重编码为随机的
+//     wire 字节；
+//   * 运行期乱序：每次 vm_run 调用都用栈地址/计数器混合的熵对 handler 槽
+//     位重新洗牌。
+//
+// 两层叠加后，op -> 处理函数的映射既随构建变化，也随调用变化，静态分析
+// 无法用固定的 opcode-模式匹配到分发结构。
+// ---------------------------------------------------------------------------
+typedef enum {
+    VH_OK = 0,   // 继续执行
+    VH_BAD,      // 指令畸形：记日志并以 0 退出
+    VH_DONE,     // 正常返回（*retval 已填）
+    VH_STOP      // 致命错误已记日志，保留 retval 退出
+} vh_r;
+
+typedef vh_r (*vm_handler)(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                           void **args, uint64_t num);
+
+static vh_r h_parammap(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                        void **args, uint64_t num) {
+    (void)retval;
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t n = rd32(f, pc);
+    for (uint32_t i = 0; i < n; i++) {
+        if (!need(f, *pc, 8)) return VH_BAD;
+        uint32_t off = rd32(f, pc);
+        uint32_t sz  = rd32(f, pc);
+        if (i < num && args[i] && slot_ok(f, off, sz))
+            memcpy(f->slots + off, args[i], sz);   // rest stays zeroed
+    }
+    return VH_OK;
+}
+
+static vh_r h_alloca(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                     void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 8)) return VH_BAD;
+    uint32_t res = rd32(f, pc);
+    uint32_t area = rd32(f, pc);
+    if (!slot_ok(f, res, 8)) return VH_BAD;
+    arena_node *node = (arena_node *)malloc(sizeof(arena_node) + area);
+    if (!node) return VH_BAD;
+    node->next = f->arena;
+    node->size = area;
+    f->arena = node;
+    memset((char *)(node + 1), 0, area);
+    slot_write(f, res, (uint64_t)(uintptr_t)(node + 1));
+    return VH_OK;
+}
+
+static vh_r h_load(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                   void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t ptr;
+    if (!read_val(f, pc, &ptr)) return VH_BAD;
+    if (!need(f, *pc, 1)) return VH_BAD;
+    uint8_t w = rd8(f, pc);
+    if (!slot_ok(f, dst, 8) || w == 0 || w > 8) return VH_BAD;
+    uint64_t v = 0;
+    memcpy(&v, (const void *)(uintptr_t)ptr, w);   // zero-extends
+    slot_write(f, dst, v);
+    return VH_OK;
+}
+
+static vh_r h_store(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                    void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    uint64_t v, ptr;
+    if (!read_val(f, pc, &v)) return VH_BAD;
+    if (!read_val(f, pc, &ptr)) return VH_BAD;
+    if (!need(f, *pc, 1)) return VH_BAD;
+    uint8_t w = rd8(f, pc);
+    if (w == 0 || w > 8) return VH_BAD;
+    memcpy((void *)(uintptr_t)ptr, &v, w);
+    return VH_OK;
+}
+
+static vh_r h_gep(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                  void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t base;
+    if (!read_val(f, pc, &base)) return VH_BAD;
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t n = rd32(f, pc);
+    uint64_t addr = base;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t idx;
+        if (!read_val(f, pc, &idx)) return VH_BAD;
+        if (!need(f, *pc, 4)) return VH_BAD;
+        uint32_t scale = rd32(f, pc);     // byte scale per index (v3)
+        // GEP indices are signed; slot values are zero-extended, so a
+        // negative index arrives as its two's-complement 64-bit value.
+        addr = (uint64_t)((int64_t)addr + (int64_t)idx * (int64_t)scale);
+    }
+    if (!slot_ok(f, dst, 8)) return VH_BAD;
+    slot_write(f, dst, addr);
+    return VH_OK;
+}
+
+static vh_r h_cmp(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                  void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 2)) return VH_BAD;
+    uint8_t pred = rd8(f, pc);
+    uint8_t obits = rd8(f, pc);
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t a, b;
+    if (!read_val(f, pc, &a)) return VH_BAD;
+    if (!read_val(f, pc, &b)) return VH_BAD;
+    if (!slot_ok(f, dst, 8)) return VH_BAD;
+    { uint64_t cr = cmp_eval(pred, a, b, obits) ? 1ull : 0ull;
+      VTRACE("CMP pred=%u bits=%u a=%llx b=%llx -> %llu\n",
+             pred, obits, (unsigned long long)a, (unsigned long long)b,
+             (unsigned long long)cr);
+      slot_write(f, dst, cr); }
+    return VH_OK;
+}
+
+static vh_r h_cast(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                   void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 3)) return VH_BAD;
+    uint8_t cop = rd8(f, pc);
+    uint8_t sbits = rd8(f, pc);
+    uint8_t dbits = rd8(f, pc);
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t v;
+    if (!read_val(f, pc, &v)) return VH_BAD;
+    if (!slot_ok(f, dst, 8)) return VH_BAD;
+    { uint64_t cv = cast_eval(cop, sbits, dbits, v);
+      VTRACE("CAST op=%u sb=%u db=%u v=%llx -> %llx\n",
+             cop, sbits, dbits, (unsigned long long)v, (unsigned long long)cv);
+      slot_write(f, dst, cv); }
+    return VH_OK;
+}
+
+static vh_r h_br(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                 void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 1)) return VH_BAD;
+    uint8_t kind = rd8(f, pc);
+    if (kind == 0) {
+        if (!need(f, *pc, 4)) return VH_BAD;
+        *pc = rd32(f, pc);
+    } else {
+        uint64_t cond;
+        if (!read_val(f, pc, &cond)) return VH_BAD;
+        if (!need(f, *pc, 8)) return VH_BAD;
+        uint32_t t = rd32(f, pc);
+        uint32_t fl = rd32(f, pc);
+        *pc = cond ? t : fl;
+    }
+    if (*pc >= f->size) {
+        vm_fatal(f, *pc, "branch target out of range");
+        return VH_STOP;
+    }
+    return VH_OK;
+}
+
+static vh_r h_call(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                   void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 8)) return VH_BAD;
+    uint64_t id = rd64(f, pc);
+    if (!need(f, *pc, 8)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint32_t dynN = rd32(f, pc);
+    if (dynN > VM_MAX_DYN_ARGS) return VH_BAD;
+    void *cargs[VM_MAX_DYN_ARGS];
+    for (uint32_t i = 0; i < dynN; i++) {
+        if (!need(f, *pc, 4)) return VH_BAD;
+        uint32_t off = rd32(f, pc);
+        if (!slot_ok(f, off, 8)) return VH_BAD;
+        cargs[i] = f->slots + off;
+    }
+    uint64_t ret = handle_call(id, cargs, dynN);
+    if (dst != 0xFFFFFFFFu && slot_ok(f, dst, 8))
+        slot_write(f, dst, ret);
+    return VH_OK;
+}
+
+static vh_r h_ret(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                  void **args, uint64_t num) {
+    (void)args; (void)num;
+    uint64_t v;
+    if (!read_val(f, pc, &v)) return VH_BAD;
+    VTRACE("RET %llx\n", (unsigned long long)v);
+    *retval = v;
+    return VH_DONE;
+}
+
+static vh_r h_arith(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                    void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 3)) return VH_BAD;
+    uint8_t sub = rd8(f, pc);
+    uint8_t tk = rd8(f, pc);
+    uint8_t bits = rd8(f, pc);
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t a, b;
+    if (!read_val(f, pc, &a)) return VH_BAD;
+    if (!read_val(f, pc, &b)) return VH_BAD;
+    if (!slot_ok(f, dst, 8)) return VH_BAD;
+    { uint64_t ar = arith_eval(sub, tk, bits, a, b);
+      VTRACE("ARITH sub=%u tk=%u bits=%u a=%llx b=%llx -> %llx\n",
+             sub, tk, bits, (unsigned long long)a, (unsigned long long)b,
+             (unsigned long long)ar);
+      slot_write(f, dst, ar); }
+    return VH_OK;
+}
+
+/* 预留槽位：SELECT（阶段五实现），当前命中即拒 */
+static vh_r h_select_stub(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                          void **args, uint64_t num) {
+    (void)pc; (void)retval; (void)args; (void)num;
+    vm_fatal(f, 0, "opcode reserved (select)");
+    return VH_STOP;
+}
+
+/* 规范序 handler 表（与 VM_OP_CANON 同序）：
+   ALLOCA LOAD STORE GEP CMP CAST BR CALL RET ARITH PARAMMAP SELECT */
+static const vm_handler VM_CanonHandlers[VM_OP_N] = {
+    h_alloca, h_load, h_store, h_gep, h_cmp, h_cast,
+    h_br, h_call, h_ret, h_arith, h_parammap, h_select_stub
+};
+
+/* 每次调用重建分发表：
+   lut[wire字节] = 槽位；  htab[槽位] = handler 函数指针。
+   槽位序 π_run 来自栈地址与调用计数的混合熵（Fisher–Yates 洗牌），
+   wire 字节序来自构建期置换 perm。 */
+static volatile uint64_t g_vm_calls = 0;   /* 仅作熵源，竞争无害 */
+
+static void build_dispatch(const uint8_t perm[VM_OP_N],
+                           vm_handler htab[VM_OP_N], uint8_t lut[256]) {
+    const uint8_t *p = perm ? perm : VM_OP_CANON;
+    uint8_t slot[VM_OP_N];
+    uint64_t st;
+    int i, j;
+
+    for (i = 0; i < VM_OP_N; i++) slot[i] = (uint8_t)i;
+
+    st = (uint64_t)(uintptr_t)&htab[0] ^ (uint64_t)(uintptr_t)&lut[0] ^
+         (uint64_t)(uintptr_t)&st ^ ++g_vm_calls ^ 0x9E3779B97F4A7C15ull;
+    for (i = VM_OP_N - 1; i > 0; i--) {         // 运行期槽位洗牌 π_run
+        uint64_t r = vm_sm64_next(&st);
+        j = (int)(r % (uint64_t)(i + 1));
+        uint8_t t = slot[i]; slot[i] = slot[j]; slot[j] = t;
+    }
+
+    for (i = 0; i < VM_OP_N; i++)               // 规范 handler -> 洗牌后槽位
+        htab[slot[i]] = VM_CanonHandlers[i];
+
+    memset(lut, 0xFF, 256);                     // 0xFF = 非法
+    for (i = 0; i < VM_OP_N; i++)               // wire 字节 -> 槽位
+        lut[p[i]] = slot[i];
+}
+
+// ---------------------------------------------------------------------------
 // interpreter core: runs FORMAT v2 bytecode in [code, code+size) against a
-// freshly allocated frame. perm is the opcode permutation the blob was
-// encoded with (identity for legacy blobs); every opcode fetch is decoded
-// through f.dec.
+// freshly allocated frame. perm is the build-time opcode permutation the
+// blob was encoded with (identity for legacy blobs); dispatch goes through
+// the per-invocation table built by build_dispatch().
 // ---------------------------------------------------------------------------
 static uint64_t vm_run(const uint8_t *code, uint32_t size,
                         const uint8_t perm[VM_OP_N],
@@ -440,7 +709,11 @@ static uint64_t vm_run(const uint8_t *code, uint32_t size,
     f.size = size;
     f.arena = NULL;
     f.steps = 0;
-    vm_perm_build_dec(perm ? perm : VM_OP_CANON, f.dec);
+
+    // 动态分发表（每次调用重建：构建期置换 + 运行期槽位洗牌）
+    vm_handler htab[VM_OP_N];
+    uint8_t lut[256];
+    build_dispatch(perm, htab, lut);
 
     // Conservative slot-space bound: every slot is one 8-byte word and slots
     // are never more numerous than bytecode bytes; PARAMMAP aggregates may
@@ -463,185 +736,21 @@ static uint64_t vm_run(const uint8_t *code, uint32_t size,
             vm_fatal(&f, pc, "pc out of range");
             break;
         }
-        uint8_t op = f.dec[rd8(&f, &pc)];   // wire byte -> canonical opcode
-
-        switch (op) {
-        case OP_PARAMMAP: {
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t n = rd32(&f, &pc);
-            for (uint32_t i = 0; i < n; i++) {
-                if (!need(&f, pc, 8)) goto bad;
-                uint32_t off = rd32(&f, &pc);
-                uint32_t sz  = rd32(&f, &pc);
-                if (i < num && args[i] && slot_ok(&f, off, sz)) {
-                    memcpy(f.slots + off, args[i], sz);   // rest stays zeroed
-                }
-            }
-            break;
-        }
-        case OP_ALLOCA: {
-            if (!need(&f, pc, 8)) goto bad;
-            uint32_t res = rd32(&f, &pc);
-            uint32_t area = rd32(&f, &pc);
-            if (!slot_ok(&f, res, 8)) goto bad;
-            arena_node *node = (arena_node *)malloc(sizeof(arena_node) + area);
-            if (!node) goto bad;
-            node->next = f.arena;
-            node->size = area;
-            f.arena = node;
-            memset((char *)(node + 1), 0, area);
-            slot_write(&f, res, (uint64_t)(uintptr_t)(node + 1));
-            break;
-        }
-        case OP_LOAD: {
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint64_t ptr;
-            if (!read_val(&f, &pc, &ptr)) goto bad;
-            if (!need(&f, pc, 1)) goto bad;
-            uint8_t w = rd8(&f, &pc);
-            if (!slot_ok(&f, dst, 8) || w == 0 || w > 8) goto bad;
-            uint64_t v = 0;
-            memcpy(&v, (const void *)(uintptr_t)ptr, w);   // zero-extends
-            slot_write(&f, dst, v);
-            break;
-        }
-        case OP_STORE: {
-            uint64_t v, ptr;
-            if (!read_val(&f, &pc, &v)) goto bad;
-            if (!read_val(&f, &pc, &ptr)) goto bad;
-            if (!need(&f, pc, 1)) goto bad;
-            uint8_t w = rd8(&f, &pc);
-            if (w == 0 || w > 8) goto bad;
-            memcpy((void *)(uintptr_t)ptr, &v, w);
-            break;
-        }
-        case OP_GEP: {
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint64_t base;
-            if (!read_val(&f, &pc, &base)) goto bad;
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t n = rd32(&f, &pc);
-            uint64_t addr = base;
-            for (uint32_t i = 0; i < n; i++) {
-                uint64_t idx;
-                if (!read_val(&f, &pc, &idx)) goto bad;
-                if (!need(&f, pc, 4)) goto bad;
-                uint32_t scale = rd32(&f, &pc);     // byte scale per index (v3)
-                // GEP indices are signed; slot values are zero-extended, so a
-                // negative index arrives as its two's-complement 64-bit value.
-                addr = (uint64_t)((int64_t)addr + (int64_t)idx * (int64_t)scale);
-            }
-            if (!slot_ok(&f, dst, 8)) goto bad;
-            slot_write(&f, dst, addr);
-            break;
-        }
-        case OP_CMP: {
-            if (!need(&f, pc, 2)) goto bad;
-            uint8_t pred = rd8(&f, &pc);
-            uint8_t obits = rd8(&f, &pc);
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint64_t a, b;
-            if (!read_val(&f, &pc, &a)) goto bad;
-            if (!read_val(&f, &pc, &b)) goto bad;
-            if (!slot_ok(&f, dst, 8)) goto bad;
-            { uint64_t cr = cmp_eval(pred, a, b, obits) ? 1ull : 0ull;
-              VTRACE("CMP pred=%u bits=%u a=%llx b=%llx -> %llu\n",
-                     pred, obits, (unsigned long long)a, (unsigned long long)b,
-                     (unsigned long long)cr);
-              slot_write(&f, dst, cr); }
-            break;
-        }
-        case OP_CAST: {
-            if (!need(&f, pc, 3)) goto bad;
-            uint8_t cop = rd8(&f, &pc);
-            uint8_t sbits = rd8(&f, &pc);
-            uint8_t dbits = rd8(&f, &pc);
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint64_t v;
-            if (!read_val(&f, &pc, &v)) goto bad;
-            if (!slot_ok(&f, dst, 8)) goto bad;
-            { uint64_t cv = cast_eval(cop, sbits, dbits, v);
-              VTRACE("CAST op=%u sb=%u db=%u v=%llx -> %llx\n",
-                     cop, sbits, dbits, (unsigned long long)v, (unsigned long long)cv);
-              slot_write(&f, dst, cv); }
-            break;
-        }
-        case OP_BR: {
-            if (!need(&f, pc, 1)) goto bad;
-            uint8_t kind = rd8(&f, &pc);
-            if (kind == 0) {
-                if (!need(&f, pc, 4)) goto bad;
-                pc = rd32(&f, &pc);
-            } else {
-                uint64_t cond;
-                if (!read_val(&f, &pc, &cond)) goto bad;
-                if (!need(&f, pc, 8)) goto bad;
-                uint32_t t = rd32(&f, &pc);
-                uint32_t fl = rd32(&f, &pc);
-                pc = cond ? t : fl;
-            }
-            if (pc >= f.size) { vm_fatal(&f, pc, "branch target out of range"); goto done; }
-            break;
-        }
-        case OP_CALL: {
-            if (!need(&f, pc, 8)) goto bad;
-            uint64_t id = rd64(&f, &pc);
-            if (!need(&f, pc, 8)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint32_t dynN = rd32(&f, &pc);
-            if (dynN > VM_MAX_DYN_ARGS) goto bad;
-            void *cargs[VM_MAX_DYN_ARGS];
-            for (uint32_t i = 0; i < dynN; i++) {
-                if (!need(&f, pc, 4)) goto bad;
-                uint32_t off = rd32(&f, &pc);
-                if (!slot_ok(&f, off, 8)) goto bad;
-                cargs[i] = f.slots + off;
-            }
-            uint64_t ret = handle_call(id, cargs, dynN);
-            if (dst != 0xFFFFFFFFu && slot_ok(&f, dst, 8))
-                slot_write(&f, dst, ret);
-            break;
-        }
-        case OP_RET: {
-            uint64_t v;
-            if (!read_val(&f, &pc, &v)) goto bad;
-            VTRACE("RET %llx\n", (unsigned long long)v);
-            retval = v;
-            goto done;
-        }
-        case OP_ARITH: {
-            if (!need(&f, pc, 3)) goto bad;
-            uint8_t sub = rd8(&f, &pc);
-            uint8_t tk = rd8(&f, &pc);
-            uint8_t bits = rd8(&f, &pc);
-            if (!need(&f, pc, 4)) goto bad;
-            uint32_t dst = rd32(&f, &pc);
-            uint64_t a, b;
-            if (!read_val(&f, &pc, &a)) goto bad;
-            if (!read_val(&f, &pc, &b)) goto bad;
-            if (!slot_ok(&f, dst, 8)) goto bad;
-            { uint64_t ar = arith_eval(sub, tk, bits, a, b);
-              VTRACE("ARITH sub=%u tk=%u bits=%u a=%llx b=%llx -> %llx\n",
-                     sub, tk, bits, (unsigned long long)a, (unsigned long long)b,
-                     (unsigned long long)ar);
-              slot_write(&f, dst, ar); }
-            break;
-        }
-        default:
+        uint8_t wire = rd8(&f, &pc);             // wire 字节（可能已置换）
+        uint8_t slot = lut[wire];                // 动态表：wire -> 槽位
+        if (slot >= VM_OP_N) {
             vm_fatal(&f, pc - 1, "unknown opcode");
-            goto done;
+            break;
         }
-        continue;
-    bad:
-        vm_fatal(&f, pc, "malformed instruction");
-        retval = 0;
-        break;
+        vh_r r = htab[slot](&f, &pc, &retval, args, num);
+        if (r == VH_BAD) {
+            vm_fatal(&f, pc, "malformed instruction");
+            retval = 0;
+            break;
+        }
+        if (r != VH_OK) break;                   // VH_DONE / VH_STOP
     }
-done:
+
     while (f.arena) {
         arena_node *n = f.arena->next;
         free(f.arena);

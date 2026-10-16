@@ -5,6 +5,7 @@
 // 只对“指针类型 & 可折叠为常量地址”的值启用；整型/浮点常量仍内嵌编码即可。
 
 #include "HandleCallTool.h"              // 你的工具类（命名空间 vmp）
+#include "../runtime/vm_crypt.h"          // 密封/密钥流/操作码置换（与运行时共享）
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Constants.h"
@@ -43,6 +44,20 @@ enum : uint8_t {
   OP_ARITH  = 0x10,   // 统一“基本算术”
   OP_PARAMMAP = 0x11,
 };
+
+// 与 vm_crypt.h 的规范表钉死一致（两处任一变动都会在编译期炸出）
+static_assert(OP_ALLOCA   == VM_OP_ALLOCA &&
+              OP_LOAD     == VM_OP_LOAD   &&
+              OP_STORE    == VM_OP_STORE  &&
+              OP_GEP      == VM_OP_GEP    &&
+              OP_CMP      == VM_OP_CMP    &&
+              OP_CAST     == VM_OP_CAST   &&
+              OP_BR       == VM_OP_BR     &&
+              OP_CALL     == VM_OP_CALL   &&
+              OP_RET      == VM_OP_RET    &&
+              OP_ARITH    == VM_OP_ARITH  &&
+              OP_PARAMMAP == VM_OP_PARAMMAP,
+              "VMCodeGen opcode enum drifted from vm_crypt.h");
 
 // 值编码
 enum : uint8_t { VT_CONST = 0, VT_SLOT = 1 };
@@ -98,6 +113,13 @@ public:
       DL(F.getParent()->getDataLayout()),
     Tool(tool), PtrSize(F.getParent()->getDataLayout().getPointerSize()) {}
 
+  /// 设置操作码置换表（-irobf-irvm-dispatch）；nullptr = 规范编码。
+  /// 必须在 run() 之前调用。
+  void setOpPerm(const uint8_t perm[VM_OP_N]) {
+    if (perm) { memcpy(OpPerm, perm, VM_OP_N); OpPermSet = true; }
+    else { OpPermSet = false; }
+  }
+
   void run() {
     expandConstantExprs();
     enterFunction();      // 分配返回槽 & 形参槽；收集参数映射
@@ -122,6 +144,14 @@ private:
   llvm::DataLayout DL;
   vmp::HandleCallTool &Tool;
   unsigned PtrSize;
+
+  // 动态分发：操作码置换（展望②）
+  uint8_t OpPerm[VM_OP_N];
+  bool OpPermSet = false;
+  // 所有 opcode 发射的唯一入口：规范码经 vm_op_encode 重编码后写入
+  void emitOp(uint8_t canonical) {
+    p8(Code, vm_op_encode(canonical, OpPermSet ? OpPerm : VM_OP_CANON));
+  }
 
   // 状态
   std::vector<uint8_t> Code;
@@ -168,7 +198,7 @@ private:
 
   // --------- OP_PARAMMAP ---------
   void emitParamMap() {
-    p8(Code, OP_PARAMMAP);
+    emitOp(OP_PARAMMAP);
     p32(Code, (uint32_t)ParamMap.size());
     for (auto &pd : ParamMap) { p32(Code, pd.off); p32(Code, pd.size); }
   }
@@ -212,7 +242,7 @@ private:
       uint64_t kid = Tool.ensureConstAddrId(C8);         // ← 为该常量地址拿到 handle_call id
       uint32_t dst = allocSlot(V, V->getType());         //   物化结果写回它自己的 slot
 
-      p8(Code, OP_CALL);
+      emitOp(OP_CALL);
       p64(Code, kid);
       p32(Code, dst);            // dst = slot
       p32(Code, 0);              // dynN = 0
@@ -303,7 +333,7 @@ private:
   void t_allo(llvm::AllocaInst &I) {
     uint32_t res_off = allocSlot(&I, I.getType());
     uint64_t area_sz = DL.getTypeAllocSize(I.getAllocatedType());
-    p8(Code, OP_ALLOCA); p32(Code, res_off); p32(Code, (uint32_t)area_sz);
+    emitOp(OP_ALLOCA); p32(Code, res_off); p32(Code, (uint32_t)area_sz);
   }
 
   void t_load(llvm::LoadInst &I) {
@@ -311,7 +341,7 @@ private:
     materializeConstPtrIfPossible(I.getPointerOperand());
 
     uint32_t dst = allocSlot(&I, I.getType());
-    p8(Code, OP_LOAD); p32(Code, dst);
+    emitOp(OP_LOAD); p32(Code, dst);
     encodeValue(I.getPointerOperand());
     p8(Code, loadStoreWidth(I.getType(), DL));   // v2: access width in bytes
   }
@@ -322,7 +352,7 @@ private:
       materializeConstPtrIfPossible(I.getValueOperand());
     materializeConstPtrIfPossible(I.getPointerOperand());
 
-    p8(Code, OP_STORE);
+    emitOp(OP_STORE);
     encodeValue(I.getValueOperand());
     encodeValue(I.getPointerOperand());
     p8(Code, loadStoreWidth(I.getValueOperand()->getType(), DL)); // v2: width
@@ -374,7 +404,7 @@ private:
     auto Enc = mapLLVMArith(I);
     if (!Enc) { llvm::errs() << "[VMCodeGen] unsupported binop for ARITH: " << I << "\n"; return; }
     uint32_t dst = allocSlot(&I, I.getType());
-    p8(Code, OP_ARITH); p8(Code, Enc->sub); p8(Code, Enc->tk); p8(Code, Enc->bits);
+    emitOp(OP_ARITH); p8(Code, Enc->sub); p8(Code, Enc->tk); p8(Code, Enc->bits);
     p32(Code, dst);
     encodeValue(I.getOperand(0));
     encodeValue(I.getOperand(1));
@@ -382,7 +412,7 @@ private:
 
   void t_cmp(llvm::CmpInst &I) {
     uint32_t dst = allocSlot(&I, I.getType());
-    p8(Code, OP_CMP);
+    emitOp(OP_CMP);
     p8(Code, (uint8_t)I.getPredicate());
     { // v2: operand width -- integer bit width, or 32/64 for fp compares
       llvm::Type *OT = I.getOperand(0)->getType();
@@ -401,7 +431,7 @@ private:
     }
 
     uint32_t dst = allocSlot(&I, I.getType());
-    p8(Code, OP_CAST);
+    emitOp(OP_CAST);
     // v3: cast kind is a STABLE enum (CC_*), not LLVM's opcode number -- the
     // tree renumbered CastOps (FPExt moved 17 -> 47), and raw opcode values
     // in the bytecode broke across LLVM versions.
@@ -437,7 +467,7 @@ private:
     materializeConstPtrIfPossible(I.getPointerOperand());
 
     uint32_t dst = allocSlot(&I, I.getType());
-    p8(Code, OP_GEP);
+    emitOp(OP_GEP);
     p32(Code, dst);
     encodeValue(I.getPointerOperand());
     unsigned n = I.getNumIndices();
@@ -466,7 +496,7 @@ private:
   }
 
   void t_br(llvm::Instruction &I) {   // UncondBrInst / CondBrInst (Br was split)
-    p8(Code, OP_BR);
+    emitOp(OP_BR);
     if (I.getNumSuccessors() == 1) {
       p8(Code, 0);
       uint32_t pos = (uint32_t)Code.size(); p32(Code, 0);
@@ -484,7 +514,7 @@ private:
   }
 
   void t_ret(llvm::ReturnInst &I) {
-    p8(Code, OP_RET);
+    emitOp(OP_RET);
     if (I.getNumOperands()==0) {
       p8(Code, VT_CONST); p8(Code, CK_INT); p32(Code, 8); p64(Code, 0);
     } else {
@@ -495,7 +525,7 @@ private:
   // ===== CALL：只把“非常量参数”的槽位写入字节码 =====
   void t_call(llvm::CallBase &CB) {
     uint64_t id = Tool.ensureCallId(&CB);
-    p8(Code, OP_CALL);
+    emitOp(OP_CALL);
     p64(Code, id);
 
     // 返回槽
