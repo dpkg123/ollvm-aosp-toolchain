@@ -32,12 +32,16 @@ extern "C" {
 #endif
 
 // --- L2 entry points (mirror vm_exec.c's native evaluators exactly) --------
+// Only declared for the standalone vm2_exec.c build; when VMP.h includes this
+// header (VMP_HEADER_MODE) the implementations are static-inline in the TU.
+#ifndef VMP_HEADER_MODE
 // arith: sub = AR_* , tk = TK_INT/TK_FP, bits = operand width
 uint64_t vm2_arith(uint8_t sub, uint8_t tk, uint8_t bits, uint64_t a, uint64_t b);
 // cmp: pred = FCMP_*/ICMP_* (stable ABI), obits = operand width (32/64 mark fp)
 int vm2_cmp(uint8_t pred, uint64_t a, uint64_t b, uint8_t obits);
 // cast: cop = CC_* stable enum, sbits/dbits = source/dest widths
 uint64_t vm2_cast(uint8_t cop, uint8_t sbits, uint8_t dbits, uint64_t v);
+#endif // !VMP_HEADER_MODE
 
 // --- L2 ISA (shared by vm2_exec.c and the generator vm2gen.c) -------------
 // Deliberately disjoint from L1: different byte values, operand encoding is
