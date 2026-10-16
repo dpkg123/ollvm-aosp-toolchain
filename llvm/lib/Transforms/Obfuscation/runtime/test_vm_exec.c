@@ -47,6 +47,21 @@ uint64_t handle_call(uint64_t id, void **args, uint64_t num) {
     return 0;
 }
 
+/* sealed-blob helpers (file scope: clang rejects GNU nested functions) */
+static uint8_t sbuf[4096 + VM_SEAL_HDR_SIZE];
+static const uint8_t KEY[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+static uint8_t BADKEY[16];
+static uint8_t PERM[VM_OP_N];
+
+static uint32_t seal(unsigned flags, const uint8_t *key) {
+    vm_seal_write_header(sbuf, flags);
+    memcpy(sbuf + VM_SEAL_HDR_SIZE, buf, len);
+    if (flags & VM_SEAL_F_ENCRYPTED)
+        vm_keystream(sbuf + VM_SEAL_HDR_SIZE, len, key);
+    return VM_SEAL_HDR_SIZE + len;
+}
+static uint8_t op_(uint8_t canon) { uint8_t w = vm_op_encode(canon, PERM); p8_(w); return w; }
+
 int main(void) {
     // 1. PARAMMAP + ARITH add on param slots + RET
     {
@@ -239,16 +254,6 @@ int main(void) {
     }
 
     // ===== sealed-blob path (-irobf-irvm-enc) ==============================
-    static uint8_t sbuf[4096 + VM_SEAL_HDR_SIZE];
-    static const uint8_t KEY[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
-    static uint8_t BADKEY[16];
-    uint32_t seal(unsigned flags, const uint8_t *key) {
-        vm_seal_write_header(sbuf, flags);
-        memcpy(sbuf + VM_SEAL_HDR_SIZE, buf, len);
-        if (flags & VM_SEAL_F_ENCRYPTED)
-            vm_keystream(sbuf + VM_SEAL_HDR_SIZE, len, key);
-        return VM_SEAL_HDR_SIZE + len;
-    }
     // S1. encrypted blob: decrypt-execute-reencrypt yields the same result
     //     as the plaintext run of the same stream (test-1 stream)
     {
@@ -325,9 +330,7 @@ int main(void) {
     }
 
     // ===== permuted-dispatch path (-irobf-irvm-dispatch) ===================
-    static uint8_t PERM[VM_OP_N];
     vm_perm_from_seed(0xC0FFEE123456789ull, PERM);
-    uint8_t op_(uint8_t canon) { uint8_t w = vm_op_encode(canon, PERM); p8_(w); return w; }
     // 同一流用明文规范码与置换码各跑一遍，结果必须一致（P1：enc+perm）
     {
         // 明文基准
