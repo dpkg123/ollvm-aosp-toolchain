@@ -275,8 +275,7 @@ private:
         case Instruction::FRem:
         case Instruction::ICmp:
         case Instruction::FCmp:
-        case 2: // Br on old trees / UncondBr on new (numeric for both)
-        case 3: // CondBr on trees that split it
+        case Instruction::Br:   // this tree still has unified Br (=2)
         case Instruction::Switch:
         case Instruction::Ret:
         case Instruction::PHI:
