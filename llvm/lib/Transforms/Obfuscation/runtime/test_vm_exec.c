@@ -4,6 +4,7 @@
 // and asserts the result. This is the interpreter's ground truth: it must
 // pass on the host before the compiler side ever emits a byte.
 #include "vm_exec.h"
+#include "vm_crypt.h"
 #include <assert.h>
 
 #include <stdio.h>
@@ -235,6 +236,92 @@ int main(void) {
         p8_(0x0A); vslot(0);
         double d; uint64_t b = run(NULL,0); memcpy(&d,&b,8);
         CHECK(d == 5.0, "fmul64");
+    }
+
+    // ===== sealed-blob path (-irobf-irvm-enc) ==============================
+    static uint8_t sbuf[4096 + VM_SEAL_HDR_SIZE];
+    static const uint8_t KEY[16] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    static uint8_t BADKEY[16];
+    uint32_t seal(unsigned flags, const uint8_t *key) {
+        vm_seal_write_header(sbuf, flags);
+        memcpy(sbuf + VM_SEAL_HDR_SIZE, buf, len);
+        if (flags & VM_SEAL_F_ENCRYPTED)
+            vm_keystream(sbuf + VM_SEAL_HDR_SIZE, len, key);
+        return VM_SEAL_HDR_SIZE + len;
+    }
+    // S1. encrypted blob: decrypt-execute-reencrypt yields the same result
+    //     as the plaintext run of the same stream (test-1 stream)
+    {
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);
+        op_arith(0, 0, 32, 8, 0,0,0, 0,0,0);
+        p8_(0x0A); vslot(8);
+        uint64_t arg = 21; void *args[1] = { &arg };
+        uint64_t plain = run(args, 1);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, NULL, args, 1) == plain,
+              "sealed enc == plaintext run");
+        // the .rodata-style original must still be ciphertext (unmodified)
+        CHECK(sbuf[VM_SEAL_HDR_SIZE] != 0x11, "rodata original stays sealed");
+    }
+    // S2. encrypted blob with control flow + args (test-15 stream)
+    {
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);
+        uint32_t here = len;
+        p8_(0x08); p8_(1); vslot(0); p32_(0); p32_(0);
+        uint32_t T = len;
+        op_arith(0,0,32,8, 5,1,0, 6,1,0); p8_(0x0A); vslot(8);
+        uint32_t F = len;
+        p8_(0x0A); vconst_i(0);
+        buf[here+1+1+1+4+0]=(uint8_t)T; buf[here+6]=(uint8_t)(T>>8);
+        buf[here+7]=(uint8_t)(T>>16); buf[here+8]=(uint8_t)(T>>24);
+        buf[here+9]=(uint8_t)F; buf[here+10]=(uint8_t)(F>>8);
+        buf[here+11]=(uint8_t)(F>>16); buf[here+12]=(uint8_t)(F>>24);
+        uint64_t a1 = 1; void *args1[1] = { &a1 };
+        uint64_t plain = run(args1, 1);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, NULL, args1, 1) == plain,
+              "sealed enc condbr == plaintext");
+    }
+    // S3. wrong key never yields the correct answer (deterministic stream)
+    {
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);
+        op_arith(0, 0, 32, 8, 0,0,0, 0,0,0);
+        p8_(0x0A); vslot(8);
+        uint64_t arg = 21; void *args[1] = { &arg };
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED, KEY);
+        uint64_t r_bad = vm_exec_sealed(sbuf, total, BADKEY, NULL, args, 1);
+        CHECK(r_bad != 42, "wrong key gives wrong answer");
+    }
+    // S4. encrypted blob without a key: graceful 0, no crash
+    {
+        reset();
+        p8_(0x0A); vconst_i(7);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, NULL, NULL, NULL, 0) == 0,
+              "enc blob without key -> 0");
+        // legacy entry on an encrypted blob (no key argument available):
+        // detected via header, also refuses gracefully
+        CHECK(vm_exec(sbuf, total, NULL, 0) == 0,
+              "legacy entry refuses enc blob");
+    }
+    // S5. legacy (unsealed) blob through vm_exec_sealed: perm is ignored
+    {
+        reset();
+        p8_(0x0A); vconst_i(0x55);
+        uint8_t junk[VM_OP_N]; vm_perm_from_seed(123, junk);
+        CHECK(vm_exec_sealed(buf, len, NULL, junk, NULL, 0) == 0x55,
+              "legacy blob ignores perm");
+    }
+    // S6. sealed but unencrypted, unpermuted: header skipped, runs directly
+    {
+        reset();
+        p8_(0x0A); vconst_i(0x77);
+        uint32_t total = seal(0, NULL);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, NULL, NULL, 0) == 0x77,
+              "sealed plaintext runs");
     }
 
     printf("vm_exec interpreter: %d checks passed\n", tests_run);
