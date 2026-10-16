@@ -677,19 +677,29 @@ static vh_r h_arith(vm_frame *f, uint32_t *pc, uint64_t *retval,
     return VH_OK;
 }
 
-/* 预留槽位：SELECT（阶段五实现），当前命中即拒 */
-static vh_r h_select_stub(vm_frame *f, uint32_t *pc, uint64_t *retval,
-                          void **args, uint64_t num) {
-    (void)pc; (void)retval; (void)args; (void)num;
-    vm_fatal(f, 0, "opcode reserved (select)");
-    return VH_STOP;
+/* SELECT: dst = cond ? tv : fv（cond 槽/常量，非零即真；值为 64 位字） */
+static vh_r h_select(vm_frame *f, uint32_t *pc, uint64_t *retval,
+                     void **args, uint64_t num) {
+    (void)retval; (void)args; (void)num;
+    if (!need(f, *pc, 4)) return VH_BAD;
+    uint32_t dst = rd32(f, pc);
+    uint64_t c, tv, fv;
+    if (!read_val(f, pc, &c))  return VH_BAD;
+    if (!read_val(f, pc, &tv)) return VH_BAD;
+    if (!read_val(f, pc, &fv)) return VH_BAD;
+    if (!slot_ok(f, dst, 8)) return VH_BAD;
+    { uint64_t sv = c ? tv : fv;
+      VTRACE("SELECT c=%llx -> %llx\n", (unsigned long long)c,
+             (unsigned long long)sv);
+      slot_write(f, dst, sv); }
+    return VH_OK;
 }
 
 /* 规范序 handler 表（与 VM_OP_CANON 同序）：
    ALLOCA LOAD STORE GEP CMP CAST BR CALL RET ARITH PARAMMAP SELECT */
 static const vm_handler VM_CanonHandlers[VM_OP_N] = {
     h_alloca, h_load, h_store, h_gep, h_cmp, h_cast,
-    h_br, h_call, h_ret, h_arith, h_parammap, h_select_stub
+    h_br, h_call, h_ret, h_arith, h_parammap, h_select
 };
 
 /* 每次调用重建分发表：
