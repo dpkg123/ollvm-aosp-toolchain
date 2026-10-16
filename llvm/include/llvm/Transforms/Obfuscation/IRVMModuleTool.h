@@ -159,6 +159,8 @@ public:
         frx::rewriteToVMExec(F, GV, bytes.size(), opt);
         llvm::errs() << "[irvm]   + rewritten to vm_exec stub: "
                      << F.getName() << "\n";
+        F.setSection("");   // idempotency: never re-virtualize the stub
+        F.removeFnAttr(llvm::Attribute::OptimizeNone);
         S.NumRewritten++;
 
       // } catch (const std::exception &e) {
