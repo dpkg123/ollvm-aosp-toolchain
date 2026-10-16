@@ -470,9 +470,10 @@ private:
       uint32_t pos = (uint32_t)Code.size(); p32(Code, 0);
       BrFixups.push_back({pos, I.getSuccessor(0)});
     } else {
-      llvm::CondBrInst *CB = llvm::cast<llvm::CondBrInst>(&I);
+      // condition = operand 0 of a conditional branch; successors are the
+      // trailing operands (works on unified-Br and split-CondBr trees)
       p8(Code, 1);
-      encodeValue(CB->getCondition());
+      encodeValue(I.getOperand(0));
       uint32_t posT = (uint32_t)Code.size(); p32(Code, 0);
       BrFixups.push_back({posT, I.getSuccessor(0)});
       uint32_t posF = (uint32_t)Code.size(); p32(Code, 0);
