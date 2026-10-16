@@ -9,9 +9,10 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
-#include "llvm/ADT/Optional.h"
+#include <optional>
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -23,6 +24,12 @@
 namespace vmp {
 
 // ===== 字节码定义（与 VM 端对齐） =====
+//
+// FORMAT v2 (runtime/vm_exec.c): slots are 8-byte aligned words holding
+// zero-extended values; OP_LOAD/OP_STORE carry an explicit access width,
+// OP_CAST carries src/dst bit widths, OP_CMP carries the operand width,
+// OP_GEP carries sizeof(source element). v1 emitted none of these and was
+// not implementable by a standalone interpreter.
 enum : uint8_t {
   OP_ALLOCA = 0x01,
   OP_LOAD   = 0x02,
@@ -50,6 +57,12 @@ enum : uint8_t {
   AR_FADD, AR_FSUB, AR_FMUL, AR_FDIV, AR_FREM,
 };
 enum : uint8_t { TK_INT=0, TK_FP=1 };
+
+// v3: stable cast kinds (LLVM renumbers its CastOps; the bytecode must not)
+enum : uint8_t {
+  CC_TRUNC=1, CC_ZEXT, CC_SEXT, CC_FPTOUI, CC_FPTOSI, CC_UITOFP, CC_SITOFP,
+  CC_FPTRUNC, CC_FPEXT, CC_PTRTOINT, CC_INTTOPTR, CC_BITCAST,
+};
 
 // ==== 小端打包 ====
 static inline void p8 (std::vector<uint8_t>& out, uint8_t v)  { out.push_back(v); }
@@ -81,8 +94,9 @@ static bool isConstLike(llvm::Value *V) {
 class VMCodeGen {
 public:
   VMCodeGen(llvm::Function &F, vmp::HandleCallTool &tool)
-  : F(F), M(*F.getParent()), C(M.getContext()), DL(&M),
-    Tool(tool), PtrSize(DL.getPointerSize()) {}
+  : F(F), M(*F.getParent()), C(M.getContext()),
+      DL(F.getParent()->getDataLayout()),
+    Tool(tool), PtrSize(F.getParent()->getDataLayout().getPointerSize()) {}
 
   void run() {
     expandConstantExprs();
@@ -131,7 +145,7 @@ private:
         for (unsigned oi=0; oi<I->getNumOperands(); ++oi) {
           if (auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(I->getOperand(oi))) {
             llvm::Instruction *NewI = CE->getAsInstruction();
-            NewI->insertBefore(I);
+            NewI->insertBefore(I->getIterator());
             I->setOperand(oi, NewI);
           }
         }
@@ -162,11 +176,31 @@ private:
   // --------- data-slot 分配 ---------
   uint32_t allocSlot(const llvm::Value* V, llvm::Type* Ty) {
     if (auto it = SlotOf.find(V); it!=SlotOf.end()) return it->second;
-    uint32_t off = CurrDataOffset;
+    // v2: every slot is 8-byte aligned and occupies a multiple of 8 bytes.
+    // The VM side reads/writes slots as zero-extended 64-bit words (narrow
+    // values are written low-byte-first after clearing the whole slot), so
+    // adjacent narrow slots must never share a word. PARAMMAP still copies
+    // only the payload bytes (pd.size), so large by-value aggregates simply
+    // reserve a proportionally larger aligned slot.
+    uint32_t off = (CurrDataOffset + 7u) & ~7u;
     uint64_t sz  = DL.getTypeAllocSize(Ty);
-    CurrDataOffset += (uint32_t)sz;
+    CurrDataOffset = off + (uint32_t)((sz + 7u) & ~7u);
     SlotOf[V] = off;
     return off;
+  }
+
+  // v2 width helpers ---------------------------------------------------------
+  static uint8_t loadStoreWidth(llvm::Type *Ty, const llvm::DataLayout &DL) {
+    uint64_t sz = DL.getTypeAllocSize(Ty);
+    if (sz == 1 || sz == 2 || sz == 4 || sz == 8) return (uint8_t)sz;
+    return 8; // aggregates fall back to word-size; VM treats it as bytes
+  }
+  static uint8_t bitsOf(llvm::Type *Ty) {
+    if (Ty->isIntegerTy())  return (uint8_t)Ty->getIntegerBitWidth();
+    if (Ty->isPointerTy())  return 64;
+    if (Ty->isFloatTy())    return 32;
+    if (Ty->isDoubleTy())   return 64;
+    return 0;
   }
 
   // --------- 指针常量“现场物化”：插入 OP_CALL(id=const) 写到它的 slot ---------
@@ -238,7 +272,8 @@ private:
       case Instruction::Alloca:  return t_allo(cast<AllocaInst>(I));
       case Instruction::Load:    return t_load(cast<LoadInst>(I));
       case Instruction::Store:   return t_store(cast<StoreInst>(I));
-      case Instruction::Br:      return t_br(cast<BranchInst>(I));
+      case Instruction::UncondBr:
+      case Instruction::CondBr:  return t_br(I);
       case Instruction::Ret:     return t_ret(cast<ReturnInst>(I));
       case Instruction::BitCast:
       case Instruction::PtrToInt:
@@ -276,6 +311,7 @@ private:
     uint32_t dst = allocSlot(&I, I.getType());
     p8(Code, OP_LOAD); p32(Code, dst);
     encodeValue(I.getPointerOperand());
+    p8(Code, loadStoreWidth(I.getType(), DL));   // v2: access width in bytes
   }
 
   void t_store(llvm::StoreInst &I) {
@@ -287,11 +323,12 @@ private:
     p8(Code, OP_STORE);
     encodeValue(I.getValueOperand());
     encodeValue(I.getPointerOperand());
+    p8(Code, loadStoreWidth(I.getValueOperand()->getType(), DL)); // v2: width
   }
 
   // ===== 基本算术统一为 OP_ARITH =====
   struct ArithEnc { uint8_t sub; uint8_t tk; uint8_t bits; };
-  llvm::Optional<ArithEnc> mapLLVMArith(const llvm::Instruction &I) {
+  std::optional<ArithEnc> mapLLVMArith(const llvm::Instruction &I) {
     using namespace llvm;
     ArithEnc E{};
     switch (I.getOpcode()) {
@@ -316,17 +353,17 @@ private:
       case Instruction::FMul: E.sub=AR_FMUL; E.tk=TK_FP;  break;
       case Instruction::FDiv: E.sub=AR_FDIV; E.tk=TK_FP;  break;
       case Instruction::FRem: E.sub=AR_FREM; E.tk=TK_FP;  break;
-      default: return llvm::None;
+      default: return std::nullopt;
     }
     if (E.tk == TK_INT) {
-      if (!I.getType()->isIntegerTy()) return llvm::None;
+      if (!I.getType()->isIntegerTy()) return std::nullopt;
       unsigned bw = I.getType()->getIntegerBitWidth();
       if (bw==8||bw==16||bw==32||bw==64) E.bits = (uint8_t)bw;
-      else return llvm::None;
+      else return std::nullopt;
     } else {
       if      (I.getType()->isFloatTy())  E.bits = 32;
       else if (I.getType()->isDoubleTy()) E.bits = 64;
-      else return llvm::None;
+      else return std::nullopt;
     }
     return E;
   }
@@ -345,6 +382,10 @@ private:
     uint32_t dst = allocSlot(&I, I.getType());
     p8(Code, OP_CMP);
     p8(Code, (uint8_t)I.getPredicate());
+    { // v2: operand width -- integer bit width, or 32/64 for fp compares
+      llvm::Type *OT = I.getOperand(0)->getType();
+      p8(Code, OT->isFloatTy() ? 32 : (OT->isDoubleTy() ? 64 : bitsOf(OT)));
+    }
     p32(Code, dst);
     encodeValue(I.getOperand(0));
     encodeValue(I.getOperand(1));
@@ -359,7 +400,28 @@ private:
 
     uint32_t dst = allocSlot(&I, I.getType());
     p8(Code, OP_CAST);
-    p8(Code, (uint8_t)I.getOpcode());
+    // v3: cast kind is a STABLE enum (CC_*), not LLVM's opcode number -- the
+    // tree renumbered CastOps (FPExt moved 17 -> 47), and raw opcode values
+    // in the bytecode broke across LLVM versions.
+    uint8_t cc = 0;
+    switch (I.getOpcode()) {
+      case llvm::Instruction::Trunc:   cc = CC_TRUNC;   break;
+      case llvm::Instruction::ZExt:    cc = CC_ZEXT;    break;
+      case llvm::Instruction::SExt:    cc = CC_SEXT;    break;
+      case llvm::Instruction::FPToUI:  cc = CC_FPTOUI;  break;
+      case llvm::Instruction::FPToSI:  cc = CC_FPTOSI;  break;
+      case llvm::Instruction::UIToFP:  cc = CC_UITOFP;  break;
+      case llvm::Instruction::SIToFP:  cc = CC_SITOFP;  break;
+      case llvm::Instruction::FPTrunc: cc = CC_FPTRUNC; break;
+      case llvm::Instruction::FPExt:   cc = CC_FPEXT;   break;
+      case llvm::Instruction::PtrToInt:cc = CC_PTRTOINT;break;
+      case llvm::Instruction::IntToPtr:cc = CC_INTTOPTR;break;
+      case llvm::Instruction::BitCast: cc = CC_BITCAST; break;
+      default: cc = CC_BITCAST; break;
+    }
+    p8(Code, cc);
+    p8(Code, bitsOf(I.getOperand(0)->getType()));  // v2: src bits
+    p8(Code, bitsOf(I.getType()));                 // v2: dst bits
     p32(Code, dst);
     encodeValue(I.getOperand(0));
   }
@@ -378,18 +440,39 @@ private:
     encodeValue(I.getPointerOperand());
     unsigned n = I.getNumIndices();
     p32(Code, n);
-    for (auto Idx = I.idx_begin(); Idx != I.idx_end(); ++Idx) encodeValue(*Idx);
+    // v3: one byte-scale PER INDEX. A gep's first index steps by the size of
+    // the whole source element, subsequent indices by the nested element --
+    // a single element size (v2) mis-addressed multi-index geps like
+    // gep([10 x i32]* p, 0, i), which -O0 emits verbatim.
+    auto Idxs = I.indices();
+    auto GTI = llvm::generic_gep_type_iterator<decltype(Idxs.begin())>::begin(
+                   I.getSourceElementType(), Idxs.begin());
+    auto GTE = llvm::generic_gep_type_iterator<decltype(Idxs.end())>::end(Idxs.end());
+    for (; GTI != GTE; ++GTI) {
+      llvm::Value *Idx = GTI.getOperand();
+      encodeValue(Idx);
+      uint32_t scale = 1;
+      if (llvm::StructType *ST = GTI.getStructTypeOrNull()) {
+        // constant struct-field index; non-constant ones are rejected above
+        uint64_t F = llvm::cast<llvm::ConstantInt>(Idx)->getZExtValue();
+        scale = (uint32_t)DL.getStructLayout(ST)->getElementOffset((unsigned)F);
+      } else {
+        scale = (uint32_t)DL.getTypeAllocSize(GTI.getIndexedType());
+      }
+      p32(Code, scale);
+    }
   }
 
-  void t_br(llvm::BranchInst &I) {
+  void t_br(llvm::Instruction &I) {   // UncondBrInst / CondBrInst (Br was split)
     p8(Code, OP_BR);
-    if (I.isUnconditional()) {
+    if (I.getNumSuccessors() == 1) {
       p8(Code, 0);
       uint32_t pos = (uint32_t)Code.size(); p32(Code, 0);
       BrFixups.push_back({pos, I.getSuccessor(0)});
     } else {
+      llvm::CondBrInst *CB = llvm::cast<llvm::CondBrInst>(&I);
       p8(Code, 1);
-      encodeValue(I.getCondition());
+      encodeValue(CB->getCondition());
       uint32_t posT = (uint32_t)Code.size(); p32(Code, 0);
       BrFixups.push_back({posT, I.getSuccessor(0)});
       uint32_t posF = (uint32_t)Code.size(); p32(Code, 0);
