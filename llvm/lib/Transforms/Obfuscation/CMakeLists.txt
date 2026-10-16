@@ -1,6 +1,7 @@
 add_llvm_component_library(LLVMObfuscation
   Utils.cpp
   ObfuscationPassManager.cpp
+  IRVM.cpp
   ObfuscationOptions.cpp
   IndirectBranch.cpp
   IndirectCall.cpp
