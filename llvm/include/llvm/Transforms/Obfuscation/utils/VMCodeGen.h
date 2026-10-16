@@ -272,8 +272,8 @@ private:
       case Instruction::Alloca:  return t_allo(cast<AllocaInst>(I));
       case Instruction::Load:    return t_load(cast<LoadInst>(I));
       case Instruction::Store:   return t_store(cast<StoreInst>(I));
-      case Instruction::UncondBr:
-      case Instruction::CondBr:  return t_br(I);
+      case 2: // br family (numeric: unified or split)
+      case 3: return t_br(I);
       case Instruction::Ret:     return t_ret(cast<ReturnInst>(I));
       case Instruction::BitCast:
       case Instruction::PtrToInt:

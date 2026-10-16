@@ -275,8 +275,7 @@ private:
         case Instruction::FRem:
         case Instruction::ICmp:
         case Instruction::FCmp:
-        case Instruction::UncondBr:   // this tree already has the split
-        case Instruction::CondBr:
+        case Instruction::Br:  // unified Br on this tree
         case Instruction::Switch:
         case Instruction::Ret:
         case Instruction::PHI:
