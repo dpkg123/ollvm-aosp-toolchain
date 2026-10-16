@@ -29,6 +29,7 @@
 // be compiled into any target directly: clang -c vm_exec.c && clang app.c vm_exec.o
 
 #include "vm_exec.h"
+#include "vm_crypt.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,19 +39,23 @@
 #include <math.h>
 
 // ---------------------------------------------------------------------------
-// bytecode opcodes / encodings (must match VMCodeGen.h exactly)
+// bytecode opcodes / encodings — canonical values live in vm_crypt.h (single
+// source shared with VMCodeGen.h). With per-build opcode permutation the wire
+// bytes differ; every fetch goes through the frame's decode LUT f.dec, so the
+// switch below only ever sees canonical opcodes.
 // ---------------------------------------------------------------------------
-#define OP_ALLOCA     0x01
-#define OP_LOAD       0x02
-#define OP_STORE      0x03
-#define OP_GEP        0x05
-#define OP_CMP        0x06
-#define OP_CAST       0x07
-#define OP_BR         0x08
-#define OP_CALL       0x09
-#define OP_RET        0x0A
-#define OP_ARITH      0x10
-#define OP_PARAMMAP   0x11
+#define OP_ALLOCA     VM_OP_ALLOCA
+#define OP_LOAD       VM_OP_LOAD
+#define OP_STORE      VM_OP_STORE
+#define OP_GEP        VM_OP_GEP
+#define OP_CMP        VM_OP_CMP
+#define OP_CAST       VM_OP_CAST
+#define OP_BR         VM_OP_BR
+#define OP_CALL       VM_OP_CALL
+#define OP_RET        VM_OP_RET
+#define OP_ARITH      VM_OP_ARITH
+#define OP_PARAMMAP   VM_OP_PARAMMAP
+#define OP_SELECT     VM_OP_SELECT /* reserved: IR select virtualization */
 
 #define VT_CONST      0
 #define VT_SLOT       1
@@ -152,6 +157,7 @@ typedef struct {
     uint32_t slots_bytes;
     arena_node *arena;
     uint64_t steps;
+    uint8_t dec[256];      // wire opcode byte -> canonical opcode (0 = invalid)
 } vm_frame;
 
 #define VM_MAX_DYN_ARGS 256
@@ -419,9 +425,14 @@ static uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v) 
 }
 
 // ---------------------------------------------------------------------------
-// entry
+// interpreter core: runs FORMAT v2 bytecode in [code, code+size) against a
+// freshly allocated frame. perm is the opcode permutation the blob was
+// encoded with (identity for legacy blobs); every opcode fetch is decoded
+// through f.dec.
 // ---------------------------------------------------------------------------
-uint64_t vm_exec(const uint8_t *code, uint32_t size, void **args, uint64_t num) {
+static uint64_t vm_run(const uint8_t *code, uint32_t size,
+                        const uint8_t perm[VM_OP_N],
+                        void **args, uint64_t num) {
     if (!code || size == 0) return 0;
 
     vm_frame f;
@@ -429,6 +440,7 @@ uint64_t vm_exec(const uint8_t *code, uint32_t size, void **args, uint64_t num) 
     f.size = size;
     f.arena = NULL;
     f.steps = 0;
+    vm_perm_build_dec(perm ? perm : VM_OP_CANON, f.dec);
 
     // Conservative slot-space bound: every slot is one 8-byte word and slots
     // are never more numerous than bytecode bytes; PARAMMAP aggregates may
@@ -451,7 +463,7 @@ uint64_t vm_exec(const uint8_t *code, uint32_t size, void **args, uint64_t num) 
             vm_fatal(&f, pc, "pc out of range");
             break;
         }
-        uint8_t op = rd8(&f, &pc);
+        uint8_t op = f.dec[rd8(&f, &pc)];   // wire byte -> canonical opcode
 
         switch (op) {
         case OP_PARAMMAP: {
@@ -637,4 +649,76 @@ done:
     }
     free(f.slots);
     return retval;
+}
+
+// ---------------------------------------------------------------------------
+// public entries
+// ---------------------------------------------------------------------------
+/* vm_exec_sealed — the hardening-aware entry the IRVM stubs call when the
+ * module was built with -mllvm -irobf-irvm-enc / -irobf-irvm-dispatch.
+ *
+ *   code : sealed blob  = [8-byte IRVS header][payload]
+ *          (or a legacy plaintext blob — detected via the header magic)
+ *   key16: 16-byte keystream key global (required for encrypted payloads;
+ *          ignored otherwise)
+ *   perm : VM_OP_N-byte opcode permutation global (NULL = canonical)
+ *
+ * "Code 加密" semantics implemented here:
+ *   * .rodata keeps the ciphertext forever (const pages are never written);
+ *   * each invocation mallocs a private working copy, decrypts it, interprets
+ *     from it, then RE-ENCRYPTS the copy before free — so the heap never
+ *     retains plaintext bytecode beyond an active call, and freed-memory /
+ *     post-mortem dumps see ciphertext.
+ */
+uint64_t vm_exec_sealed(const uint8_t *code, uint32_t size,
+                         const uint8_t *key16, const uint8_t *perm,
+                         void **args, uint64_t num) {
+    if (!code || size == 0) return 0;
+
+    unsigned flags = 0;
+    size_t payload_off = 0;
+    int sealed = vm_seal_parse(code, (size_t)size, &flags, &payload_off);
+
+    const uint8_t *wcode = code;
+    uint32_t wsize = size;
+    uint8_t *work = NULL;
+
+    if (sealed) {
+        wcode = code + payload_off;
+        wsize = size - (uint32_t)payload_off;
+        if (flags & VM_SEAL_F_ENCRYPTED) {
+            if (!key16) {
+                fprintf(stderr,
+                        "[vm_exec] FATAL: encrypted blob without a key\n");
+                return 0;
+            }
+            work = (uint8_t *)malloc(wsize ? wsize : 1);
+            if (!work) return 0;
+            memcpy(work, wcode, wsize);
+            vm_keystream(work, wsize, key16);        // decrypt working copy
+            wcode = work;
+        }
+        if ((flags & VM_SEAL_F_PERMUTED) && !perm) {
+            fprintf(stderr,
+                    "[vm_exec] FATAL: permuted blob without a perm table\n");
+            free(work);
+            return 0;
+        }
+    }
+
+    uint64_t r = vm_run(wcode, wsize,
+                        (sealed && (flags & VM_SEAL_F_PERMUTED)) ? perm : NULL,
+                        args, num);
+
+    if (work) {
+        vm_keystream(work, wsize, key16);            // re-encrypt before free
+        free(work);
+    }
+    return r;
+}
+
+/* legacy entry — behaves exactly as before for unsealed blobs; sealed blobs
+ * are detected via their header (perm/key default to canonical/none). */
+uint64_t vm_exec(const uint8_t *code, uint32_t size, void **args, uint64_t num) {
+    return vm_exec_sealed(code, size, NULL, NULL, args, num);
 }
