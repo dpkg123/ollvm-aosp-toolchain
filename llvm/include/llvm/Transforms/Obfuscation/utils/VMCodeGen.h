@@ -268,12 +268,14 @@ private:
   // --------- 指令分发 ---------
   void translateInst(llvm::Instruction &I) {
     using namespace llvm;
+    // Br is opcode 2 on every LLVM (split into UncondBr=2/CondBr=3 on newer
+    // trees); match numerically so the generator builds on both.
+    if (I.getOpcode() == 2 || I.getOpcode() == 3) return t_br(I);
     switch (I.getOpcode()) {
       case Instruction::Alloca:  return t_allo(cast<AllocaInst>(I));
       case Instruction::Load:    return t_load(cast<LoadInst>(I));
       case Instruction::Store:   return t_store(cast<StoreInst>(I));
-      case Instruction::UncondBr:
-      case Instruction::CondBr:  return t_br(I);
+
       case Instruction::Ret:     return t_ret(cast<ReturnInst>(I));
       case Instruction::BitCast:
       case Instruction::PtrToInt:
