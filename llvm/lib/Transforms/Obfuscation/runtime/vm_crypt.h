@@ -153,19 +153,35 @@ static inline void vm_derive_key16(uint8_t key[16], uint64_t seed) {
 // ---------------------------------------------------------------------------
 #define VM_OP_N 12
 
+/* canonical opcode bytes — the FORMAT v2/v3 wire contract. vm_exec.c and
+ * VMCodeGen.h both use these (OP_* aliases / emitOp) so the two tables can
+ * never drift; vm_crypt's KAT tests pin the values. */
+#define VM_OP_ALLOCA   0x01
+#define VM_OP_LOAD     0x02
+#define VM_OP_STORE    0x03
+#define VM_OP_GEP      0x05
+#define VM_OP_CMP      0x06
+#define VM_OP_CAST     0x07
+#define VM_OP_BR       0x08
+#define VM_OP_CALL     0x09
+#define VM_OP_RET      0x0A
+#define VM_OP_ARITH    0x10
+#define VM_OP_PARAMMAP 0x11
+#define VM_OP_SELECT   0x0C /* reserved: IR select virtualization */
+
 static const uint8_t VM_OP_CANON[VM_OP_N] = {
-  0x01, /* ALLOCA    */
-  0x02, /* LOAD      */
-  0x03, /* STORE     */
-  0x05, /* GEP       */
-  0x06, /* CMP       */
-  0x07, /* CAST      */
-  0x08, /* BR        */
-  0x09, /* CALL      */
-  0x0A, /* RET       */
-  0x10, /* ARITH     */
-  0x11, /* PARAMMAP  */
-  0x0C, /* SELECT (reserved: IR select virtualization) */
+  VM_OP_ALLOCA,
+  VM_OP_LOAD,
+  VM_OP_STORE,
+  VM_OP_GEP,
+  VM_OP_CMP,
+  VM_OP_CAST,
+  VM_OP_BR,
+  VM_OP_CALL,
+  VM_OP_RET,
+  VM_OP_ARITH,
+  VM_OP_PARAMMAP,
+  VM_OP_SELECT,
 };
 
 static inline void vm_perm_identity(uint8_t perm[VM_OP_N]) {
