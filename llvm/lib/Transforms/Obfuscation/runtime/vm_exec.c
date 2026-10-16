@@ -260,7 +260,15 @@ static uint64_t sext_to_64(uint64_t v, uint32_t bits) {
     return sign ? (v | (~0ull << bits)) : v;
 }
 
-static int cmp_eval(uint8_t pred, uint64_t a, uint64_t b, uint32_t bits) {
+// 原生评估器：默认 static；测试构建 -DVM_EXEC_EXPOSE_EVAL 暴露给
+// test_vm2.c 作为等价性对照的 oracle。
+#if defined(VM_EXEC_EXPOSE_EVAL)
+#define VM_EVAL_FN
+#else
+#define VM_EVAL_FN static
+#endif
+
+VM_EVAL_FN int cmp_eval(uint8_t pred, uint64_t a, uint64_t b, uint32_t bits) {
     if (pred < 16) {
         // floating compare: bits == 32 -> f32 pattern, 64 -> f64 pattern
         if (bits == 32) {
@@ -322,7 +330,7 @@ static int cmp_eval(uint8_t pred, uint64_t a, uint64_t b, uint32_t bits) {
     return 0;
 }
 
-static uint64_t arith_eval(uint8_t sub, uint8_t tk, uint8_t bits,
+VM_EVAL_FN uint64_t arith_eval(uint8_t sub, uint8_t tk, uint8_t bits,
                            uint64_t a, uint64_t b) {
     if (tk == 1) { // floating
         if (bits == 32) {
@@ -389,7 +397,7 @@ static uint64_t arith_eval(uint8_t sub, uint8_t tk, uint8_t bits,
     return r & mask;   // zero-extended by construction (mask, not sign-extend)
 }
 
-static uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v) {
+VM_EVAL_FN uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v) {
     switch (op) {
     case CAST_TRUNC: {
         uint64_t mask = (dbits >= 64) ? ~0ull : ((1ull << dbits) - 1ull);
@@ -421,6 +429,28 @@ static uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v) 
     default:
         return v;                                     // pointer-width identity
     }
+}
+
+// ---------------------------------------------------------------------------
+// 嵌套 VM（展望③）钩子：链接 vm2_exec.c 时，强符号接管——L1 的算术/比较/
+// 类型转换核心由二级 VM 解释执行；未链接时弱回退到上面的原生评估器，
+// 单文件运行时保持可用。语义由 test_vm2.c 穷举等价验证。
+// ---------------------------------------------------------------------------
+#if defined(__GNUC__)
+#define VM2_HOOK __attribute__((weak))
+#else
+#define VM2_HOOK
+#endif
+
+VM2_HOOK uint64_t vm2_arith(uint8_t sub, uint8_t tk, uint8_t bits,
+                            uint64_t a, uint64_t b) {
+    return arith_eval(sub, tk, bits, a, b);
+}
+VM2_HOOK int vm2_cmp(uint8_t pred, uint64_t a, uint64_t b, uint8_t obits) {
+    return cmp_eval(pred, a, b, obits);
+}
+VM2_HOOK uint64_t vm2_cast(uint8_t cop, uint8_t sbits, uint8_t dbits, uint64_t v) {
+    return cast_eval(cop, sbits, dbits, v);
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +574,7 @@ static vh_r h_cmp(vm_frame *f, uint32_t *pc, uint64_t *retval,
     if (!read_val(f, pc, &a)) return VH_BAD;
     if (!read_val(f, pc, &b)) return VH_BAD;
     if (!slot_ok(f, dst, 8)) return VH_BAD;
-    { uint64_t cr = cmp_eval(pred, a, b, obits) ? 1ull : 0ull;
+    { uint64_t cr = vm2_cmp(pred, a, b, obits) ? 1ull : 0ull;
       VTRACE("CMP pred=%u bits=%u a=%llx b=%llx -> %llu\n",
              pred, obits, (unsigned long long)a, (unsigned long long)b,
              (unsigned long long)cr);
@@ -564,7 +594,7 @@ static vh_r h_cast(vm_frame *f, uint32_t *pc, uint64_t *retval,
     uint64_t v;
     if (!read_val(f, pc, &v)) return VH_BAD;
     if (!slot_ok(f, dst, 8)) return VH_BAD;
-    { uint64_t cv = cast_eval(cop, sbits, dbits, v);
+    { uint64_t cv = vm2_cast(cop, sbits, dbits, v);
       VTRACE("CAST op=%u sb=%u db=%u v=%llx -> %llx\n",
              cop, sbits, dbits, (unsigned long long)v, (unsigned long long)cv);
       slot_write(f, dst, cv); }
@@ -639,7 +669,7 @@ static vh_r h_arith(vm_frame *f, uint32_t *pc, uint64_t *retval,
     if (!read_val(f, pc, &a)) return VH_BAD;
     if (!read_val(f, pc, &b)) return VH_BAD;
     if (!slot_ok(f, dst, 8)) return VH_BAD;
-    { uint64_t ar = arith_eval(sub, tk, bits, a, b);
+    { uint64_t ar = vm2_arith(sub, tk, bits, a, b);
       VTRACE("ARITH sub=%u tk=%u bits=%u a=%llx b=%llx -> %llx\n",
              sub, tk, bits, (unsigned long long)a, (unsigned long long)b,
              (unsigned long long)ar);
