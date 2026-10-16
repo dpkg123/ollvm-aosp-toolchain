@@ -16,6 +16,7 @@ add_llvm_component_library(LLVMObfuscation
         ConstantEncryption.cpp
         support/IRUtils.cpp
         Obfuscation.cpp
+        IRVM.cpp
         
         DEPENDS
         intrinsics_gen
