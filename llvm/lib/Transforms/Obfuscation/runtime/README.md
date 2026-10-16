@@ -2,28 +2,35 @@
 
 The IR virtualizer (`.irvm` section + `-mllvm -irobf-irvm`, see
 `../utils/IRVMModuleTool.h`) rewrites marked functions into calls to
-`vm_exec(code, size, args, num)`. `FuncRedirector.hpp` links a **weak empty
-stub** when no definition is present — a build without this runtime compiles
-and links, then falls into that stub at runtime. **Always link this file into
-anything built with `-irobf-irvm`:**
+`vm_exec(code, size, args, num)`. Since the header-only rework the runtime
+ships entirely inside `VMP.h` — **include it and you are done**, no .c files
+to pick between:
 
-    clang -mllvm -irobf-irvm app.c \
-        llvm/lib/Transforms/Obfuscation/runtime/vm_exec.c -lm -o app
+    #include "VMP.h"
+    IRVM_SECTION int my_secret(int a, int b) { return a * b + 1; }
+
+    clang -mllvm -irobf-irvm -mllvm -irobf-irvm-enc \
+          -mllvm -irobf-irvm-dispatch app.c -lm -o app
+
+Without the include (and without linking anything) the pass emits a WEAK
+empty `vm_exec` stub instead — such builds still link, then fall into the
+stub at runtime.
 
 ## What is here
 
 | file | role |
 |---|---|
-| `vm_exec.h` | public surface: `vm_exec` + `vm_exec_sealed` |
-| `vm_crypt.h` | **shared seal core** — keystream cipher, IRVS header, opcode permutation; single source of truth for the pass (C++) and the runtime (C99) |
-| `vm_exec.c` | the L1 interpreter: FORMAT v2 slot machine, sealed-blob handling, dynamic dispatch table |
-| `vm2_exec.h/.c` | the **level-2 VM** (optional link): interprets the L1 interpreter's arith/cmp/cast cores |
+| `VMP.h` | **the runtime** (header-only): L1 interpreter + seal handling + level-2 VM, `static inline` internals + weak exports |
+| `vm_crypt.h` | shared seal core — keystream cipher, IRVS header, opcode permutation; single source of truth for the pass (C++) and the runtime (C99) |
+| `vm2_exec.h` | L2 ISA (included by VMP.h; prototypes only for the deprecated standalone build) |
 | `vm2_prog.h` | sealed L2 programs (generated — do not edit) |
 | `vm2gen.c` | dev-time generator for `vm2_prog.h` (not shipped in builds) |
-| `VMP.h` | user-side header (`IRVM_SECTION`, weak `handle_call` fallback) |
+| `vm_exec.h` | plain prototypes for reference |
+| `vm_exec.c`, `vm2_exec.c` | DEPRECATED one-line shims (`#include "VMP.h"`) — old link commands keep working |
 | `test_vm_crypt.c` | seal/keystream/permutation KAT + property tests |
 | `test_vm_exec.c` | L1 interpreter tests: hand-packed bytecode, sealed + permuted paths |
 | `test_vm2.c` | exhaustive L2-vs-native equivalence (84k cases) |
+| `test_vmp_header{,_tu2.c,.cpp}` | header-only smoke: 3 TUs (C/C++), strong-`handle_call` coexistence |
 
 ## FORMAT v2 (generator + interpreter contract)
 
@@ -69,15 +76,14 @@ Two layers, no static switch anywhere:
 
 The opcode↔handler mapping differs per build *and* per call.
 
-### ③ 嵌套 VM (link `vm2_exec.c`)
+### ③ 嵌套 VM (on by default in VMP.h)
 
-`OP_ARITH` / `OP_CMP` / `OP_CAST` delegate to `vm2_arith` / `vm2_cmp` /
-`vm2_cast`: the L1 interpreter's semantic cores execute as **L2 bytecode** on
-a second, deliberately disjoint stack machine (different ISA, rel32 branches,
-sealed programs decrypted once per process, re-encrypted at exit). Lifting
-the target now requires lifting two unrelated VMs. Linking is optional —
-without `vm2_exec.c`, weak hooks fall back to the native evaluators and the
-runtime behaves exactly like the single-file version.
+`OP_ARITH` / `OP_CMP` / `OP_CAST` delegate to the L2 cores: the L1
+interpreter's semantic cores execute as **L2 bytecode** on a second,
+deliberately disjoint stack machine (different ISA, rel32 branches, sealed
+programs decrypted once per process, re-encrypted at exit). Lifting the target
+now requires lifting two unrelated VMs. Slim it out with `#define VMP_L2 0`
+before including `VMP.h` (falls back to the native evaluators).
 
 ### `select` 虚拟化
 
@@ -88,16 +94,24 @@ limitation.)
 
 ### Build matrix
 
+Everything below assumes `app.c` starts with `#include "VMP.h"`:
+
     # base virtualization
-    clang -mllvm -irobf-irvm app.c vm_exec.c -lm -o app
+    clang -mllvm -irobf-irvm app.c -lm -o app
     # + ① encryption (compile side: -irobf-irvm-enc)
-    clang -mllvm -irobf-irvm -mllvm -irobf-irvm-enc app.c vm_exec.c -lm -o app
+    clang -mllvm -irobf-irvm -mllvm -irobf-irvm-enc app.c -lm -o app
     # + ② dynamic dispatch (-irobf-irvm-dispatch)
     clang -mllvm -irobf-irvm -mllvm -irobf-irvm-enc \
-          -mllvm -irobf-irvm-dispatch app.c vm_exec.c -lm -o app
-    # + ③ nested VM: link vm2_exec.c
-    clang -mllvm -irobf-irvm -mllvm -irobf-irvm-enc \
-          -mllvm -irobf-irvm-dispatch app.c vm_exec.c vm2_exec.c -lm -o app
+          -mllvm -irobf-irvm-dispatch app.c -lm -o app
+    # + ③ nested VM: already on; `#define VMP_L2 0` in app.c to disable
+
+Header knobs (define before `#include "VMP.h"`):
+
+| knob | effect |
+|---|---|
+| `VMP_L2 0` | native evaluators instead of the level-2 VM (smaller code) |
+| `VMP_NO_WEAK_HANDLE_CALL` | suppress the weak `handle_call` fallback (define your own) |
+| `VMP_EXPOSE_EVAL` | keep native evaluators compiled (test oracle) |
 
 Reproducible builds: `-mllvm -irobf-irvm-seed=N` pins the RNG (keys +
 permutation).
@@ -106,9 +120,12 @@ permutation).
 
     cd llvm/lib/Transforms/Obfuscation/runtime
     cc test_vm_crypt.c -o t1 && ./t1                                            # 253 checks
-    cc vm_exec.c test_vm_exec.c -o t2 -lm && ./t2                               # 43 checks (native cores)
-    cc vm_exec.c vm2_exec.c test_vm_exec.c -o t3 -lm && ./t3                     # 43 checks (L2 cores)
-    cc -DVM_EXEC_EXPOSE_EVAL test_vm2.c vm_exec.c vm2_exec.c -o t4 -lm && ./t4  # 84k L2 equivalence
+    cc -I. test_vm_exec.c -o t2 -lm && ./t2                                     # 43 checks (L2 cores)
+    cc -I. -DVMP_L2=0 test_vm_exec.c -o t2n -lm && ./t2n                        # 43 checks (native cores)
+    cc -I. test_vm2.c -o t4 -lm && ./t4                                         # 84k L2 equivalence
+    cc -I. -c test_vmp_header.c test_vmp_header_tu2.c && \
+       c++ -I. -c test_vmp_header.cpp && \
+       cc test_vmp_header*.o -o t5 -lm && ./t5                                  # header smoke (C+C++)
 
 Regenerating the L2 programs after touching `vm2_exec.h`/`vm2gen.c`:
 
@@ -130,3 +147,7 @@ Regenerating the L2 programs after touching `vm2_exec.h`/`vm2gen.c`:
   re-running `vm2gen`).
 - L2 lazy-decrypt is once-per-process (race is benign); the working copies
   are re-encrypted at exit via `atexit`.
+- Header-only mode inlines the runtime into every TU that includes `VMP.h`
+  (~12 KB object growth per TU at -O0; unused internals strip out under
+  optimization). `VMP_L2 0` halves that; the deprecated shims exist for old
+  link commands.
