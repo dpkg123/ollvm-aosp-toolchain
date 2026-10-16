@@ -65,6 +65,29 @@ public:
 
     initRNG(M);
 
+    // 动态分发（展望②）：每模块生成一张随机操作码置换表并落盘为全局，
+    // 发射侧 emitOp 按它重编码，运行侧 build_dispatch 据它查表。
+    uint8_t OpPerm[VM_OP_N];
+    llvm::GlobalVariable *PermGV = nullptr;
+    if (Opt.Dispatch) {
+      vm_perm_from_seed(NextKeySeed(), OpPerm);
+      auto *PermArrTy = llvm::ArrayType::get(
+          llvm::Type::getInt8Ty(M.getContext()), VM_OP_N);
+      PermGV = ginit::ensureDefinableGV(M, "__irvm_op_perm", PermArrTy,
+                                        llvm::Align(1));
+      PermGV->setLinkage(llvm::GlobalValue::ExternalLinkage);
+      PermGV->setConstant(true);
+      PermGV->setSection(".rodata.irvm");
+      if (!ginit::setBytes(PermGV,
+                           llvm::ArrayRef<uint8_t>(OpPerm, VM_OP_N))) {
+        llvm::errs() << "[irvm] ! FAILED to emit opcode perm table; "
+                        "falling back to canonical opcodes\n";
+        PermGV = nullptr;
+      } else {
+        llvm::errs() << "[irvm] opcode permutation table emitted\n";
+      }
+    }
+
     vmp::HandleCallTool handleTool;
     handleTool.bindModule(M);
 
@@ -151,42 +174,49 @@ public:
 
       // try {
         vmp::VMCodeGen gen(F, handleTool);
+        gen.setOpPerm(Opt.Dispatch && PermGV ? OpPerm : nullptr);
         gen.run();
-        const auto &bytes = gen.code();
+        const auto &bytes = gen.code();   // 可能已按置换重编码
 
-        // -------- 密封（Code 加密，展望①）: blob = IRVS 头 + 密文 --------
+        // -------- 密封（展望①②）: blob = IRVS 头 + [密文]载荷 --------
         std::vector<uint8_t> blob(bytes.begin(), bytes.end());
         unsigned sealFlags = 0;
+        if (Opt.Encrypt)  sealFlags |= VM_SEAL_F_ENCRYPTED;
+        if (Opt.Dispatch) sealFlags |= VM_SEAL_F_PERMUTED;
+        const bool sealed = (sealFlags != 0);
+
         llvm::GlobalVariable *KeyGV = nullptr;
-        llvm::GlobalVariable *PermGV = nullptr;
-
-        if (Opt.Encrypt) {
+        if (sealed) {
           uint8_t key[16];
-          vm_derive_key16(key, NextKeySeed());
-          sealFlags |= VM_SEAL_F_ENCRYPTED;
+          if (Opt.Encrypt) {
+            vm_derive_key16(key, NextKeySeed());
 
-          std::string keyName = sanitizeName(F.getName()) + "_k";
-          auto *KeyArrTy =
-              llvm::ArrayType::get(llvm::Type::getInt8Ty(M.getContext()), 16);
-          KeyGV = ginit::ensureDefinableGV(M, keyName.c_str(), KeyArrTy,
-                                           llvm::Align(1));
-          KeyGV->setLinkage(llvm::GlobalValue::ExternalLinkage);
-          KeyGV->setConstant(true);
-          KeyGV->setSection(".rodata.irvm");
-          if (!ginit::setBytes(KeyGV, llvm::ArrayRef<uint8_t>(key, 16))) {
-            llvm::errs() << "[irvm]   ! FAILED to initialize key for "
-                         << F.getName() << "\n";
-            S.NumSkippedCodegen++;
-            continue;
+            std::string keyName = sanitizeName(F.getName()) + "_k";
+            auto *KeyArrTy =
+                llvm::ArrayType::get(llvm::Type::getInt8Ty(M.getContext()), 16);
+            KeyGV = ginit::ensureDefinableGV(M, keyName.c_str(), KeyArrTy,
+                                             llvm::Align(1));
+            KeyGV->setLinkage(llvm::GlobalValue::ExternalLinkage);
+            KeyGV->setConstant(true);
+            KeyGV->setSection(".rodata.irvm");
+            if (!ginit::setBytes(KeyGV, llvm::ArrayRef<uint8_t>(key, 16))) {
+              llvm::errs() << "[irvm]   ! FAILED to initialize key for "
+                           << F.getName() << "\n";
+              S.NumSkippedCodegen++;
+              continue;
+            }
           }
 
-          // 密封：头部明文 + 载荷密文（xorshift128+ 密钥流，自逆）
-          blob.insert(blob.begin(), 0, VM_SEAL_HDR_SIZE);
+          // blob = 头(明文 flags) + 载荷（已置换；加密则再叠加密钥流）
+          blob.insert(blob.begin(), VM_SEAL_HDR_SIZE, 0);
           vm_seal_write_header(blob.data(), sealFlags);
-          vm_keystream(blob.data() + VM_SEAL_HDR_SIZE, bytes.size(), key);
-          S.NumSealed++;
-          llvm::errs() << "[irvm]   + sealed (encrypted, key global "
-                       << keyName << ")\n";
+          if (Opt.Encrypt) {
+            vm_keystream(blob.data() + VM_SEAL_HDR_SIZE, bytes.size(), key);
+            S.NumSealed++;
+            llvm::errs() << "[irvm]   + sealed (encrypted + permuted)\n";
+          } else {
+            llvm::errs() << "[irvm]   + sealed (permuted opcodes)\n";
+          }
         }
 
         auto *ArrTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(M.getContext()),
@@ -212,10 +242,10 @@ public:
         }
 
         frx::VMExecOptions opt{};
-        if (Opt.Encrypt) {
+        if (sealed) {
           opt.Sealed = true;      // 桩改调 vm_exec_sealed(code,size,key,perm,...)
-          opt.KeyGV = KeyGV;
-          opt.PermGV = PermGV;    // 动态分发（展望②）接入时在此填充
+          opt.KeyGV = KeyGV;      // 仅加密时非空
+          opt.PermGV = (Opt.Dispatch && PermGV) ? PermGV : nullptr;
         }
         frx::rewriteToVMExec(F, GV, blob.size(), opt);
         llvm::errs() << "[irvm]   + rewritten to "

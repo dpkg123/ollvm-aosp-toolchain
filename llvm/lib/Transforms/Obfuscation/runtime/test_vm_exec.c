@@ -274,10 +274,10 @@ int main(void) {
         op_arith(0,0,32,8, 5,1,0, 6,1,0); p8_(0x0A); vslot(8);
         uint32_t F = len;
         p8_(0x0A); vconst_i(0);
-        buf[here+1+1+1+4+0]=(uint8_t)T; buf[here+6]=(uint8_t)(T>>8);
-        buf[here+7]=(uint8_t)(T>>16); buf[here+8]=(uint8_t)(T>>24);
-        buf[here+9]=(uint8_t)F; buf[here+10]=(uint8_t)(F>>8);
-        buf[here+11]=(uint8_t)(F>>16); buf[here+12]=(uint8_t)(F>>24);
+        buf[here+1+1+1+4+0]=(uint8_t)T; buf[here+8]=(uint8_t)(T>>8);
+        buf[here+9]=(uint8_t)(T>>16); buf[here+10]=(uint8_t)(T>>24);
+        buf[here+11]=(uint8_t)F; buf[here+12]=(uint8_t)(F>>8);
+        buf[here+13]=(uint8_t)(F>>16); buf[here+14]=(uint8_t)(F>>24);
         uint64_t a1 = 1; void *args1[1] = { &a1 };
         uint64_t plain = run(args1, 1);
         uint32_t total = seal(VM_SEAL_F_ENCRYPTED, KEY);
@@ -322,6 +322,98 @@ int main(void) {
         uint32_t total = seal(0, NULL);
         CHECK(vm_exec_sealed(sbuf, total, KEY, NULL, NULL, 0) == 0x77,
               "sealed plaintext runs");
+    }
+
+    // ===== permuted-dispatch path (-irobf-irvm-dispatch) ===================
+    static uint8_t PERM[VM_OP_N];
+    vm_perm_from_seed(0xC0FFEE123456789ull, PERM);
+    uint8_t op_(uint8_t canon) { uint8_t w = vm_op_encode(canon, PERM); p8_(w); return w; }
+    // 同一流用明文规范码与置换码各跑一遍，结果必须一致（P1：enc+perm）
+    {
+        // 明文基准
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);
+        op_arith(0, 0, 32, 8, 0,0,0, 0,0,0);
+        p8_(0x0A); vslot(8);
+        uint64_t arg = 6; void *args[1] = { &arg };
+        uint64_t plain = run(args, 1);
+        CHECK(plain == 12, "perm baseline plaintext");
+
+        // 置换码：PARAMMAP/ARITH/RET 的 opcode 字节重编码
+        reset();
+        op_(0x11); p32_(1); p32_(0); p32_(8);
+        p8_(vm_op_encode(0x10, PERM)); p8_(0); p8_(0); p8_(32); p32_(8);
+        vslot(0); vslot(0);
+        op_(0x0A); vslot(8);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED | VM_SEAL_F_PERMUTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, PERM, args, 1) == plain,
+              "perm+enc == plaintext");
+        // 置换确实发生了（至少一个操作码被重编码）
+        CHECK(vm_op_encode(0x11, PERM) != 0x11 || vm_op_encode(0x0A, PERM) != 0x0A,
+              "perm actually permutes");
+    }
+    // P2: perm only (no encryption)
+    {
+        reset();
+        op_(0x0A); vconst_i(0x99);
+        uint32_t total = seal(VM_SEAL_F_PERMUTED, NULL);
+        CHECK(vm_exec_sealed(sbuf, total, NULL, PERM, NULL, 0) == 0x99,
+              "perm-only runs");
+    }
+    // P3: wrong perm gives a different (wrong) answer — deterministic stream
+    {
+        reset();
+        op_(0x0A); vconst_i(0x42);
+        uint32_t total = seal(VM_SEAL_F_PERMUTED, NULL);
+        uint8_t bad[VM_OP_N]; vm_perm_from_seed(777, bad);
+        uint64_t r = vm_exec_sealed(sbuf, total, NULL, bad, NULL, 0);
+        CHECK(r != 0x42, "wrong perm gives wrong answer");
+    }
+    // P4: permuted blob without perm table -> graceful 0
+    {
+        reset();
+        op_(0x0A); vconst_i(1);
+        uint32_t total = seal(VM_SEAL_F_PERMUTED, NULL);
+        CHECK(vm_exec_sealed(sbuf, total, NULL, NULL, NULL, 0) == 0,
+              "permuted blob without perm -> 0");
+    }
+    // P5: full stack — enc + perm + args + conditional branch
+    {
+        // 明文基准
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);
+        uint32_t here = len;
+        p8_(0x08); p8_(1); vslot(0); p32_(0); p32_(0);
+        uint32_t T = len;
+        op_arith(0,0,32,8, 21,1,0, 21,1,0); p8_(0x0A); vslot(8);
+        uint32_t F = len;
+        p8_(0x0A); vconst_i(0);
+        buf[here+7]=(uint8_t)T; buf[here+8]=(uint8_t)(T>>8);
+        buf[here+9]=(uint8_t)(T>>16); buf[here+10]=(uint8_t)(T>>24);
+        buf[here+11]=(uint8_t)F; buf[here+12]=(uint8_t)(F>>8);
+        buf[here+13]=(uint8_t)(F>>16); buf[here+14]=(uint8_t)(F>>24);
+        uint64_t a1 = 1; void *args1[1] = { &a1 };
+        uint64_t plain = run(args1, 1);
+        CHECK(plain == 42, "full-stack baseline");
+
+        // 置换码版本（手工重打包：PARAMMAP BR ARITH RET + 内部 RET const）
+        reset();
+        op_(0x11); p32_(1); p32_(0); p32_(8);
+        uint32_t here2 = len;
+        op_(0x08); p8_(1); vslot(0); p32_(0); p32_(0);
+        uint32_t T2 = len;
+        p8_(vm_op_encode(0x10, PERM)); p8_(0); p8_(0); p8_(32); p32_(8);
+        vconst_i(21); vconst_i(21);
+        op_(0x0A); vslot(8);
+        uint32_t F2 = len;
+        op_(0x0A); vconst_i(0);
+        buf[here2+7]=(uint8_t)T2; buf[here2+8]=(uint8_t)(T2>>8);
+        buf[here2+9]=(uint8_t)(T2>>16); buf[here2+10]=(uint8_t)(T2>>24);
+        buf[here2+11]=(uint8_t)F2; buf[here2+12]=(uint8_t)(F2>>8);
+        buf[here2+13]=(uint8_t)(F2>>16); buf[here2+14]=(uint8_t)(F2>>24);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED | VM_SEAL_F_PERMUTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, PERM, args1, 1) == plain,
+              "enc+perm+args+br == plaintext");
     }
 
     printf("vm_exec interpreter: %d checks passed\n", tests_run);
