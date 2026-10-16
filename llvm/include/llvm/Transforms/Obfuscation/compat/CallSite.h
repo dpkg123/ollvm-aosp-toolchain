@@ -705,22 +705,28 @@ public:
 };
 
 template <> struct DenseMapInfo<CallSite> {
-  using BaseInfo = DenseMapInfo<decltype(CallSite::I)>;
-
+  // This tree turned CallSiteBase::I into PointerIntPair<InstrTy*,2,int> and
+  // dropped the DenseMapInfo specialization the old BaseInfo relied on; key
+  // on the opaque value instead (the int part is derived state).
+  // Dev-main removed getEmptyKey/getTombstoneKey from DenseMapInfo entirely;
+  // manufacture the sentinels directly (-1/-2, the canonical pointer keys).
   static CallSite getEmptyKey() {
     CallSite CS;
-    CS.I = BaseInfo::getEmptyKey();
+    CS.I.setFromOpaqueValue(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(-1)));
     return CS;
   }
 
   static CallSite getTombstoneKey() {
     CallSite CS;
-    CS.I = BaseInfo::getTombstoneKey();
+    CS.I.setFromOpaqueValue(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(-2)));
     return CS;
   }
 
   static unsigned getHashValue(const CallSite &CS) {
-    return BaseInfo::getHashValue(CS.I);
+    return densemap::detail::mix(
+        reinterpret_cast<uintptr_t>(CS.I.getOpaqueValue()));
   }
 
   static bool isEqual(const CallSite &LHS, const CallSite &RHS) {
