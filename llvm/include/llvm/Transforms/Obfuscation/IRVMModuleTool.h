@@ -275,7 +275,8 @@ private:
         case Instruction::FRem:
         case Instruction::ICmp:
         case Instruction::FCmp:
-        case Instruction::Br:
+        case Instruction::UncondBr:
+        case Instruction::CondBr:
         case Instruction::Switch:
         case Instruction::Ret:
         case Instruction::PHI:
