@@ -394,6 +394,20 @@ private:
         case Instruction::PHI:
           break;
 
+        case Instruction::Select: {
+          auto &SI = cast<SelectInst>(I);
+          if (SI.getType()->isVectorTy()) {
+            Why = "vector select not supported";
+            return false;
+          }
+          if (!SI.getCondition()->getType()->isIntegerTy(1)) {
+            // 向量条件的 select 结果必为向量，已在上面拒绝；保险起见再判
+            Why = "select condition not i1";
+            return false;
+          }
+          break;
+        }
+
         case Instruction::Call:
         case Instruction::CallBr: {
           auto &CB = cast<CallBase>(I);

@@ -419,6 +419,32 @@ int main(void) {
               "enc+perm+args+br == plaintext");
     }
 
+    // 21. SELECT: cond from param slot picks between two constants
+    {
+        reset();
+        p8_(0x11); p32_(1); p32_(0); p32_(8);            // slot0 = arg0
+        p8_(0x0C /*SELECT*/); p32_(16); vslot(0); vconst_i(0xAA); vconst_i(0xBB);
+        p8_(0x0A); vslot(16);
+        uint64_t a1 = 1; void *args1[1] = { &a1 };
+        uint64_t a0 = 0; void *args0[1] = { &a0 };
+        CHECK(run(args1,1) == 0xAA, "select true");
+        CHECK(run(args0,1) == 0xBB, "select false");
+    }
+    // 22. SELECT sealed+encrypted+permuted full stack
+    {
+        uint64_t a1 = 1; void *args1[1] = { &a1 };
+        uint64_t a0 = 0; void *args0[1] = { &a0 };
+        reset();
+        op_(0x11); p32_(1); p32_(0); p32_(8);
+        op_(0x0C); p32_(16); vslot(0); vconst_i(0x1234); vconst_i(0x5678);
+        op_(0x0A); vslot(16);
+        uint32_t total = seal(VM_SEAL_F_ENCRYPTED | VM_SEAL_F_PERMUTED, KEY);
+        CHECK(vm_exec_sealed(sbuf, total, KEY, PERM, args1, 1) == 0x1234,
+              "select sealed+enc+perm true");
+        CHECK(vm_exec_sealed(sbuf, total, KEY, PERM, args0, 1) == 0x5678,
+              "select sealed+enc+perm false");
+    }
+
     printf("vm_exec interpreter: %d checks passed\n", tests_run);
     return 0;
 }
