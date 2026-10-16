@@ -4,6 +4,13 @@
 //   (1) 规范化(PHI消解/ switch→if) + 句柄收集
 //   (2) 字节码生成 + 全局落地 + 重写为 vm_exec 桩
 // 失败/不支持时会打印原因并跳过，不影响其它函数。
+//
+// 硬化选项（SmallVMP 展望 ①②③，对应 cl::opt 见 IRVM.cpp）：
+//   Encrypt  —— 密封字节码（IRVS 头 + xorshift128+ 密钥流），运行时
+//               解密堆副本执行后再加密回去（Code 加密）
+//   Dispatch —— 每模块随机操作码置换，opcode↔handler 映射不再固定
+//               （动态分发的编译侧一半）
+//   L2       —— 预留：解释器核心二级 VM（见 runtime/vm2_exec.c）
 
 #pragma once
 #include "llvm/IR/Module.h"
@@ -12,7 +19,9 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <random>
 #include <string>
+#include <vector>
 #include <cctype>
 
 #include "utils/FuncRedirector.hpp"  // frx::rewriteToVMExec / VMExecOptions
@@ -21,11 +30,19 @@
 #include "utils/VMCodeGen.h"         // vmp::VMCodeGen
 #include "utils/PhiSimplifyTool.h"   // vmp::PhiEliminateTool
 #include "utils/SwitchToIf.h"        // vmp::SwitchToIfTool
+#include "runtime/vm_crypt.h"        // seal/keystream/perm（与运行时共享）
 
 namespace vmp {
 
 class IRVMModuleTool {
 public:
+  struct Options {
+    bool Encrypt = false;   // -mllvm -irobf-irvm-enc
+    bool Dispatch = false;  // -mllvm -irobf-irvm-dispatch
+    bool L2 = false;        // -mllvm -irobf-irvm-l2 (预留)
+    uint64_t Seed = 0;      // -mllvm -irobf-irvm-seed=N（0 = 随机）
+  };
+
   struct Stats {
     unsigned NumCandidates = 0;
     unsigned NumSkippedPre = 0;
@@ -33,16 +50,20 @@ public:
     unsigned NumSkippedCodegen = 0;
     unsigned NumEmitted = 0;      // 成功生成 code 全局
     unsigned NumRewritten = 0;    // 成功改写为 vm_exec
+    unsigned NumSealed = 0;       // 密封（加密）输出的函数数
     unsigned NumExceptions = 0;   // 捕获的异常次数
   };
 
   IRVMModuleTool() = default;
+  explicit IRVMModuleTool(const Options &O) : Opt(O) {}
 
   /// 主入口：对 M 中所有 .irvm 函数执行转换。
   /// 发生错误会打印并跳过，不抛异常；返回是否有任何函数被成功改写。
   bool run(llvm::Module &M) {
     using namespace llvm;
     TheDL = &M.getDataLayout();
+
+    initRNG(M);
 
     vmp::HandleCallTool handleTool;
     handleTool.bindModule(M);
@@ -133,11 +154,46 @@ public:
         gen.run();
         const auto &bytes = gen.code();
 
+        // -------- 密封（Code 加密，展望①）: blob = IRVS 头 + 密文 --------
+        std::vector<uint8_t> blob(bytes.begin(), bytes.end());
+        unsigned sealFlags = 0;
+        llvm::GlobalVariable *KeyGV = nullptr;
+        llvm::GlobalVariable *PermGV = nullptr;
+
+        if (Opt.Encrypt) {
+          uint8_t key[16];
+          vm_derive_key16(key, NextKeySeed());
+          sealFlags |= VM_SEAL_F_ENCRYPTED;
+
+          std::string keyName = sanitizeName(F.getName()) + "_k";
+          auto *KeyArrTy =
+              llvm::ArrayType::get(llvm::Type::getInt8Ty(M.getContext()), 16);
+          KeyGV = ginit::ensureDefinableGV(M, keyName.c_str(), KeyArrTy,
+                                           llvm::Align(1));
+          KeyGV->setLinkage(llvm::GlobalValue::ExternalLinkage);
+          KeyGV->setConstant(true);
+          KeyGV->setSection(".rodata.irvm");
+          if (!ginit::setBytes(KeyGV, llvm::ArrayRef<uint8_t>(key, 16))) {
+            llvm::errs() << "[irvm]   ! FAILED to initialize key for "
+                         << F.getName() << "\n";
+            S.NumSkippedCodegen++;
+            continue;
+          }
+
+          // 密封：头部明文 + 载荷密文（xorshift128+ 密钥流，自逆）
+          blob.insert(blob.begin(), 0, VM_SEAL_HDR_SIZE);
+          vm_seal_write_header(blob.data(), sealFlags);
+          vm_keystream(blob.data() + VM_SEAL_HDR_SIZE, bytes.size(), key);
+          S.NumSealed++;
+          llvm::errs() << "[irvm]   + sealed (encrypted, key global "
+                       << keyName << ")\n";
+        }
+
         auto *ArrTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(M.getContext()),
-                                           bytes.size());
+                                           blob.size());
         std::string codeName = sanitizeName(F.getName()) + "_code";
         llvm::errs() << "[irvm] emit code global: " << codeName
-                     << " (" << bytes.size() << " bytes)\n";
+                     << " (" << blob.size() << " bytes)\n";
 
         llvm::GlobalVariable *GV =
             ginit::ensureDefinableGV(M, codeName.c_str(), ArrTy, llvm::Align(1));
@@ -145,7 +201,7 @@ public:
         GV->setConstant(true);
         GV->setSection(".rodata.irvm");
 
-        if (!ginit::setBytes(GV, bytes)) {
+        if (!ginit::setBytes(GV, blob)) {
           llvm::errs() << "[irvm]   ! FAILED to initialize bytes for "
                        << F.getName() << "\n";
           S.NumSkippedCodegen++;
@@ -156,9 +212,15 @@ public:
         }
 
         frx::VMExecOptions opt{};
-        frx::rewriteToVMExec(F, GV, bytes.size(), opt);
-        llvm::errs() << "[irvm]   + rewritten to vm_exec stub: "
-                     << F.getName() << "\n";
+        if (Opt.Encrypt) {
+          opt.Sealed = true;      // 桩改调 vm_exec_sealed(code,size,key,perm,...)
+          opt.KeyGV = KeyGV;
+          opt.PermGV = PermGV;    // 动态分发（展望②）接入时在此填充
+        }
+        frx::rewriteToVMExec(F, GV, blob.size(), opt);
+        llvm::errs() << "[irvm]   + rewritten to "
+                     << (opt.Sealed ? "vm_exec_sealed" : "vm_exec")
+                     << " stub: " << F.getName() << "\n";
         F.setSection("");   // idempotency: never re-virtualize the stub
         F.removeFnAttr(llvm::Attribute::OptimizeNone);
         S.NumRewritten++;
@@ -195,6 +257,24 @@ public:
 private:
   const llvm::DataLayout *TheDL = nullptr;
   Stats S{};
+  Options Opt{};
+  std::mt19937_64 RNG;
+
+  // 种子：显式 -irobf-irvm-seed 优先（可重现构建）；否则 random_device 叉上
+  // 模块标识 —— 不同模块不同密钥，同一模块每次构建也不同。（手写 FNV-1a
+  // 哈希，兼容 getModuleIdentifier() 返回 StringRef / std::string 的树）
+  void initRNG(llvm::Module &M) {
+    uint64_t seed = Opt.Seed;
+    if (seed == 0) {
+      std::random_device rd;
+      uint64_t midHash = 0xcbf29ce484222325ull;
+      for (char c : M.getModuleIdentifier())
+        midHash = (midHash ^ (uint64_t)(unsigned char)c) * 0x100000001b3ull;
+      seed = ((uint64_t)rd() << 32) ^ rd() ^ midHash;
+    }
+    RNG.seed(seed);
+  }
+  uint64_t NextKeySeed() { return RNG(); }
 
   static bool isCandidate(const llvm::Function &F) {
     return !F.isDeclaration() && F.hasSection() && F.getSection() == ".irvm";
