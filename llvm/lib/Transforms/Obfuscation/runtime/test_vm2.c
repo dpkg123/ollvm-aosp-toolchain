@@ -6,17 +6,12 @@
 //
 // Build & run:
 //   cc -DVM_EXEC_EXPOSE_EVAL test_vm2.c vm_exec.c vm2_exec.c -lm -o t && ./t
-#include "vm_exec.h"
-#include "vm2_exec.h"
-#include "vm_crypt.h"
+#define VMP_NO_WEAK_HANDLE_CALL
+#define VMP_EXPOSE_EVAL           /* keep native evaluators as the oracle */
+#include "VMP.h"                  /* header-only runtime (L2 on by default) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* native evaluators (oracle), exposed by -DVM_EXEC_EXPOSE_EVAL */
-uint64_t arith_eval(uint8_t sub, uint8_t tk, uint8_t bits, uint64_t a, uint64_t b);
-int      cmp_eval(uint8_t pred, uint64_t a, uint64_t b, uint32_t bits);
-uint64_t cast_eval(uint8_t op, uint8_t sbits, uint8_t dbits, uint64_t v);
 
 static long tests_run = 0;
 #define CHECK(cond, name) do { tests_run++; \
@@ -37,10 +32,9 @@ static const uint64_t IV[] = {
 };
 #define NIV (sizeof IV / sizeof IV[0])
 
-static const uint8_t TK_INT = 0, TK_FP = 1;
-enum { AR_ADD=0, AR_SUB, AR_MUL, AR_UDIV, AR_SDIV, AR_UREM, AR_SREM,
-       AR_SHL, AR_LSHR, AR_ASHR, AR_AND, AR_OR, AR_XOR,
-       AR_FADD, AR_FSUB, AR_FMUL, AR_FDIV, AR_FREM };
+/* AR_ and ICMP_ constants come from VMP.h (as macros) */
+#define TK_INT 0
+#define TK_FP  1
 
 static void chk_arith_int(void) {
     static const uint8_t bitsv[4] = {8, 16, 32, 64};

@@ -3,8 +3,8 @@
 // packing helpers VMCodeGen.h uses (p8/p32/p64, little-endian), runs vm_exec,
 // and asserts the result. This is the interpreter's ground truth: it must
 // pass on the host before the compiler side ever emits a byte.
-#include "vm_exec.h"
-#include "vm_crypt.h"
+#define VMP_NO_WEAK_HANDLE_CALL   /* this test defines its own bridge */
+#include "VMP.h"                  /* header-only runtime: nothing else to link */
 #include <assert.h>
 
 #include <stdio.h>
